@@ -1,0 +1,21 @@
+[workspace]
+authors = ["AntonioFerreras <antfs10@gmail.com>"]
+channels = ["conda-forge"]
+name = "rocket-league-bot"
+platforms = ["linux-64"]
+version = "0.1.0"
+
+[tasks]
+
+[dependencies]
+python = "3.13.7.*"
+rust = ">=1.90.0,<1.91"
+wandb = ">=0.22.2,<0.23"
+
+[pypi-dependencies]
+rlgym = { version = "*", extras = ["all"] }
+rlgym-learn = { version = "*" }
+rlgym-learn-algos = { version = "*" }
+torch = { version = "==2.7.1", index = "https://download.pytorch.org/whl/cu128" }
+torchvision = { index = "https://download.pytorch.org/whl/cu128" }
+torchaudio = { index = "https://download.pytorch.org/whl/cu128" }

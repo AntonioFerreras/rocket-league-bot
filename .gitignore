@@ -1,0 +1,7 @@
+# pixi environments
+.pixi/*
+pixi.lock
+!.pixi/config.toml
+/agent_controllers_checkpoints/*
+/shmem_flinks/*
+/wandb/*
