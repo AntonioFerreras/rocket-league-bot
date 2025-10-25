@@ -58,8 +58,8 @@
         "batched_tensor_action_associated_learning_data": true
     },
     "process_config": {
-        "n_proc": 128,
-        "min_process_steps_per_inference": 57,
+        "n_proc": 64,
+        "min_process_steps_per_inference": 28,
         "render": false,
         "render_delay": 0.0,
         "instance_launch_delay": null,

@@ -2,7 +2,7 @@
 authors = ["AntonioFerreras <antfs10@gmail.com>"]
 channels = ["conda-forge"]
 name = "rocket-league-bot"
-platforms = ["linux-64", "linux-aarch64"]
+platforms = ["linux-64"]
 version = "0.1.0"
 
 [tasks]

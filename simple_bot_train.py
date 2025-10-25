@@ -1,5 +1,7 @@
 import os
 
+import torch
+
 # needed to prevent numpy from using a ton of memory in env processes and causing them to throttle each other
 os.environ["OPENBLAS_NUM_THREADS"] = "1"
 
@@ -84,8 +86,6 @@ if __name__ == "__main__":
         WandbMetricsLoggerConfigModel,
     )
     from rlgym_learn_algos.ppo import (
-        BasicCritic,
-        DiscreteFF,
         ExperienceBufferConfigModel,
         GAETrajectoryProcessor,
         GAETrajectoryProcessorConfigModel,
@@ -108,20 +108,35 @@ if __name__ == "__main__":
     )
     from rlgym_learn.rocket_league import GameStatePythonSerde
 
+    from models import BasicCritic, DiscreteFF
+
     # The obs_space_type and action_space_type are determined by your choice of ObsBuilder and ActionParser respectively.
     # The logic used here assumes you are using the types defined by the DefaultObs and LookupTableAction above.
     DefaultObsSpaceType = Tuple[str, int]
     DefaultActionSpaceType = Tuple[str, int]
+
+    train_dtype = torch.bfloat16
 
     def actor_factory(
         obs_space: DefaultObsSpaceType,
         action_space: DefaultActionSpaceType,
         device: str,
     ):
-        return DiscreteFF(obs_space[1], action_space[1], (1024, 1024, 1024, 1024), device)
+        return DiscreteFF(
+            obs_space[1], 
+            action_space[1], 
+            (1024, 1024, 1024, 1024), 
+            device, 
+            dtype=train_dtype
+        )
 
     def critic_factory(obs_space: DefaultObsSpaceType, device: str):
-        return BasicCritic(obs_space[1], (1024, 1024, 1024, 1024), device)
+        return BasicCritic(
+            obs_space[1], 
+            (1024, 1024, 1024, 1024), 
+            device, 
+            dtype=train_dtype
+        )
 
     # Create the config that will be used for the run
     config = LearningCoordinatorConfigModel(
@@ -141,7 +156,7 @@ if __name__ == "__main__":
             timestep_limit=1_000_000_000,  # Train for 1B steps
         ),
         process_config=ProcessConfigModel(
-            n_proc=128,  # Number of processes to spawn to run environments. Increasing will use more RAM but should increase steps per second, up to a point
+            n_proc=64,  # Number of processes to spawn to run environments. Increasing will use more RAM but should increase steps per second, up to a point
         ),
         agent_controllers_config={
             "PPO1": PPOAgentControllerConfigModel(
