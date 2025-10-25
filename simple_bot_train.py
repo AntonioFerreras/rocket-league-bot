@@ -141,11 +141,11 @@ if __name__ == "__main__":
             timestep_limit=1_000_000_000,  # Train for 1B steps
         ),
         process_config=ProcessConfigModel(
-            n_proc=64,  # Number of processes to spawn to run environments. Increasing will use more RAM but should increase steps per second, up to a point
+            n_proc=128,  # Number of processes to spawn to run environments. Increasing will use more RAM but should increase steps per second, up to a point
         ),
         agent_controllers_config={
             "PPO1": PPOAgentControllerConfigModel(
-                timesteps_per_iteration=500_000,
+                timesteps_per_iteration=370_000,
                 learner_config=PPOLearnerConfigModel(
                     batch_size=200_000,
                     ent_coef=0.01,  # Sets the entropy coefficient used in the PPO algorithm
