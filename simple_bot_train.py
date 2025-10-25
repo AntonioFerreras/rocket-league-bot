@@ -118,10 +118,10 @@ if __name__ == "__main__":
         action_space: DefaultActionSpaceType,
         device: str,
     ):
-        return DiscreteFF(obs_space[1], action_space[1], (256, 256, 256), device)
+        return DiscreteFF(obs_space[1], action_space[1], (1024, 1024, 1024, 1024), device)
 
     def critic_factory(obs_space: DefaultObsSpaceType, device: str):
-        return BasicCritic(obs_space[1], (256, 256, 256), device)
+        return BasicCritic(obs_space[1], (1024, 1024, 1024, 1024), device)
 
     # Create the config that will be used for the run
     config = LearningCoordinatorConfigModel(
@@ -141,17 +141,19 @@ if __name__ == "__main__":
             timestep_limit=1_000_000_000,  # Train for 1B steps
         ),
         process_config=ProcessConfigModel(
-            n_proc=32,  # Number of processes to spawn to run environments. Increasing will use more RAM but should increase steps per second, up to a point
+            n_proc=64,  # Number of processes to spawn to run environments. Increasing will use more RAM but should increase steps per second, up to a point
         ),
         agent_controllers_config={
             "PPO1": PPOAgentControllerConfigModel(
+                timesteps_per_iteration=500_000,
                 learner_config=PPOLearnerConfigModel(
+                    batch_size=200_000,
                     ent_coef=0.01,  # Sets the entropy coefficient used in the PPO algorithm
                     actor_lr=5e-5,  # Sets the learning rate of the actor model
                     critic_lr=5e-5,  # Sets the learning rate of the critic model
                 ),
                 experience_buffer_config=ExperienceBufferConfigModel(
-                    max_size=150_000,  # Sets the number of timesteps to store in the experience buffer. Old timesteps will be pruned to only store the most recently obtained timesteps.
+                    max_size=1_000_000,  # Sets the number of timesteps to store in the experience buffer. Old timesteps will be pruned to only store the most recently obtained timesteps.
                     trajectory_processor_config=GAETrajectoryProcessorConfigModel(),
                 ),
                 metrics_logger_config=WandbMetricsLoggerConfigModel(
