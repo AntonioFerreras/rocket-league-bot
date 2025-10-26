@@ -1,6 +1,5 @@
 import os
 
-import torch
 
 # needed to prevent numpy from using a ton of memory in env processes and causing them to throttle each other
 os.environ["OPENBLAS_NUM_THREADS"] = "1"
@@ -80,6 +79,7 @@ def build_rlgym_v2_env():
 if __name__ == "__main__":
     from typing import Tuple
 
+    import torch
     import numpy as np
     from rlgym_learn_algos.logging import (
         WandbMetricsLogger,
@@ -122,18 +122,22 @@ if __name__ == "__main__":
         action_space: DefaultActionSpaceType,
         device: str,
     ):
+        dim = 1024
+        num_layers = 4
         return DiscreteFF(
             obs_space[1], 
             action_space[1], 
-            (1024, 1024, 1024, 1024), 
+            (dim,) * num_layers, 
             device, 
             dtype=train_dtype
         )
 
     def critic_factory(obs_space: DefaultObsSpaceType, device: str):
+        dim = 1024
+        num_layers = 4
         return BasicCritic(
             obs_space[1], 
-            (1024, 1024, 1024, 1024), 
+            (dim,) * num_layers, 
             device, 
             dtype=train_dtype
         )
@@ -153,7 +157,7 @@ if __name__ == "__main__":
                     (PyAnySerdeType.STRING(), PyAnySerdeType.INT())
                 ),
             ),
-            timestep_limit=1_000_000_000,  # Train for 1B steps
+            timestep_limit=60_000_000_000,  # Train for 60B steps
         ),
         process_config=ProcessConfigModel(
             n_proc=64,  # Number of processes to spawn to run environments. Increasing will use more RAM but should increase steps per second, up to a point

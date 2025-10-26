@@ -54,7 +54,7 @@
         "random_seed": 123,
         "shm_buffer_size": 16384,
         "flinks_folder": "shmem_flinks",
-        "timestep_limit": 1000000000,
+        "timestep_limit": 60000000000,
         "batched_tensor_action_associated_learning_data": true
     },
     "process_config": {
