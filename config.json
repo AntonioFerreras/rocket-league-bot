@@ -58,9 +58,9 @@
         "batched_tensor_action_associated_learning_data": true
     },
     "process_config": {
-        "n_proc": 64,
-        "min_process_steps_per_inference": 28,
-        "render": false,
+        "n_proc": 1,
+        "min_process_steps_per_inference": 1,
+        "render": true,
         "render_delay": 0.0,
         "instance_launch_delay": null,
         "recalculate_agent_id_every_step": false
@@ -70,7 +70,7 @@
             "timesteps_per_iteration": 370000,
             "save_every_ts": 1000000,
             "add_unix_timestamp": true,
-            "checkpoint_load_folder": null,
+            "checkpoint_load_folder": "/home/antoniof/rocket-league-bot/agent_controllers_checkpoints/PPO1/rlgym-learn-run-1761539919727216673/1761575343189837285",
             "n_checkpoints_to_keep": 5,
             "random_seed": 123,
             "save_mid_iteration_data_in_checkpoint": true,
@@ -81,8 +81,8 @@
                 "n_minibatches": 1,
                 "ent_coef": 0.01,
                 "clip_range": 0.2,
-                "actor_lr": 0.00005,
-                "critic_lr": 0.00005,
+                "actor_lr": 0.0004,
+                "critic_lr": 0.0004,
                 "advantage_normalization": true,
                 "device": "cuda:0",
                 "cudnn_benchmark_mode": true
@@ -103,7 +103,7 @@
                 "enable": true,
                 "project": "rlgym-learn",
                 "group": "rlgym-learn-testing",
-                "run": "rlgym-learn-run",
+                "run": "simple-bot-train",
                 "id": null,
                 "new_run_with_timestamp_suffix": false,
                 "additional_wandb_run_config": {},

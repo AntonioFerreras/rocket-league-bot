@@ -28,7 +28,7 @@ def build_rlgym_v2_env():
         KickoffMutator,
         MutatorSequence,
     )
-
+    from rlgym.rocket_league.rlviser import RLViserRenderer
     spawn_opponents = True
     team_size = 2
     blue_team_size = team_size
@@ -37,6 +37,9 @@ def build_rlgym_v2_env():
     no_touch_timeout_seconds = 30
     game_timeout_seconds = 300
 
+    goal_reward_weight = 10
+    touch_reward_weight = 0.1
+
     action_parser = RepeatAction(LookupTableAction(), repeats=action_repeat)
     termination_condition = GoalCondition()
     truncation_condition = AnyCondition(
@@ -44,7 +47,7 @@ def build_rlgym_v2_env():
         TimeoutCondition(timeout_seconds=game_timeout_seconds),
     )
 
-    reward_fn = CombinedReward((GoalReward(), 10), (TouchReward(), 0.1))
+    reward_fn = CombinedReward((GoalReward(), goal_reward_weight), (TouchReward(), touch_reward_weight))
 
     obs_builder = DefaultObs(
         zero_padding=team_size,
@@ -73,10 +76,17 @@ def build_rlgym_v2_env():
         termination_cond=termination_condition,
         truncation_cond=truncation_condition,
         transition_engine=RocketSimEngine(),
+        renderer=RLViserRenderer(),
     )
 
 
 if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--resume_ckpt_folder", type=str, default=None)
+    parser.add_argument("--render", action="store_true")
+    args = parser.parse_args()
+    
     from typing import Tuple
 
     import torch
@@ -160,23 +170,26 @@ if __name__ == "__main__":
             timestep_limit=60_000_000_000,  # Train for 60B steps
         ),
         process_config=ProcessConfigModel(
-            n_proc=64,  # Number of processes to spawn to run environments. Increasing will use more RAM but should increase steps per second, up to a point
+            n_proc=64 if not args.render else 1,  # Number of processes to spawn to run environments. Increasing will use more RAM but should increase steps per second, up to a point
+            render=args.render,
         ),
         agent_controllers_config={
             "PPO1": PPOAgentControllerConfigModel(
+                checkpoint_load_folder=args.resume_ckpt_folder,
                 timesteps_per_iteration=370_000,
                 learner_config=PPOLearnerConfigModel(
                     batch_size=200_000,
                     ent_coef=0.01,  # Sets the entropy coefficient used in the PPO algorithm
-                    actor_lr=5e-5,  # Sets the learning rate of the actor model
-                    critic_lr=5e-5,  # Sets the learning rate of the critic model
+                    actor_lr=4e-4,  # Sets the learning rate of the actor model
+                    critic_lr=4e-4,  # Sets the learning rate of the critic model
                 ),
                 experience_buffer_config=ExperienceBufferConfigModel(
                     max_size=1_000_000,  # Sets the number of timesteps to store in the experience buffer. Old timesteps will be pruned to only store the most recently obtained timesteps.
                     trajectory_processor_config=GAETrajectoryProcessorConfigModel(),
                 ),
                 metrics_logger_config=WandbMetricsLoggerConfigModel(
-                    group="rlgym-learn-testing"
+                    group="rlgym-learn-testing",
+                    run="simple-bot-train"
                 ),
             )
         },
