@@ -4,6 +4,18 @@ import os
 # needed to prevent numpy from using a ton of memory in env processes and causing them to throttle each other
 os.environ["OPENBLAS_NUM_THREADS"] = "1"
 
+spawn_opponents = False
+team_size = 1
+pad_team_size = 2
+blue_team_size = team_size
+orange_team_size = team_size if spawn_opponents else 0
+action_repeat = 8
+no_touch_timeout_seconds = 30
+game_timeout_seconds = 300
+
+goal_reward_weight = 10
+touch_reward_weight = 0.1
+
 
 def build_rlgym_v2_env():
     import numpy as np
@@ -29,16 +41,7 @@ def build_rlgym_v2_env():
         MutatorSequence,
     )
     from rlgym.rocket_league.rlviser import RLViserRenderer
-    spawn_opponents = True
-    team_size = 2
-    blue_team_size = team_size
-    orange_team_size = team_size if spawn_opponents else 0
-    action_repeat = 8
-    no_touch_timeout_seconds = 30
-    game_timeout_seconds = 300
-
-    goal_reward_weight = 10
-    touch_reward_weight = 0.1
+    
 
     action_parser = RepeatAction(LookupTableAction(), repeats=action_repeat)
     termination_condition = GoalCondition()
@@ -50,7 +53,7 @@ def build_rlgym_v2_env():
     reward_fn = CombinedReward((GoalReward(), goal_reward_weight), (TouchReward(), touch_reward_weight))
 
     obs_builder = DefaultObs(
-        zero_padding=team_size,
+        zero_padding=pad_team_size,
         pos_coef=np.asarray(
             [
                 1 / common_values.SIDE_WALL_X,
@@ -83,7 +86,7 @@ def build_rlgym_v2_env():
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument("--resume_ckpt_folder", type=str, default=None)
+    parser.add_argument("--resume_ckpt", type=str, default=None)
     parser.add_argument("--render", action="store_true")
     args = parser.parse_args()
     
@@ -172,10 +175,11 @@ if __name__ == "__main__":
         process_config=ProcessConfigModel(
             n_proc=64 if not args.render else 1,  # Number of processes to spawn to run environments. Increasing will use more RAM but should increase steps per second, up to a point
             render=args.render,
+            render_delay=0 if not args.render else action_repeat/120.0,
         ),
         agent_controllers_config={
             "PPO1": PPOAgentControllerConfigModel(
-                checkpoint_load_folder=args.resume_ckpt_folder,
+                checkpoint_load_folder=args.resume_ckpt,
                 timesteps_per_iteration=370_000,
                 learner_config=PPOLearnerConfigModel(
                     batch_size=200_000,
