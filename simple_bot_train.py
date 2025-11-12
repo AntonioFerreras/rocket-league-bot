@@ -71,9 +71,9 @@ def build_rlgym_v2_env():
     distance_player_to_ball_reward_weight = 1.5
     velocity_player_to_ball_reward_weight = 1.0
     ball_to_goal_reward_weight = 1.5
-    distance_player_to_ground_reward_weight = 2.0
+    distance_player_to_ground_reward_weight = 1.0
     forward_bias_reward_weight = 1.0
-    wall_punishment_weight = 4.0
+    wall_punishment_weight = 2.0
 
     reward_fn = CombinedReward(
         (GoalReward(), goal_reward_weight),

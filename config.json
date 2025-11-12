@@ -58,10 +58,10 @@
         "batched_tensor_action_associated_learning_data": true
     },
     "process_config": {
-        "n_proc": 64,
-        "min_process_steps_per_inference": 28,
-        "render": false,
-        "render_delay": 0.0,
+        "n_proc": 1,
+        "min_process_steps_per_inference": 1,
+        "render": true,
+        "render_delay": 0.06666666666666667,
         "instance_launch_delay": null,
         "recalculate_agent_id_every_step": false
     },
@@ -70,7 +70,7 @@
             "timesteps_per_iteration": 370000,
             "save_every_ts": 1000000,
             "add_unix_timestamp": true,
-            "checkpoint_load_folder": null,
+            "checkpoint_load_folder": "/home/antoniof/rocket-league-bot/agent_controllers_checkpoints/PPO1/rlgym-learn-run-1762967729587516896/1762969299940949205",
             "n_checkpoints_to_keep": 5,
             "random_seed": 123,
             "save_mid_iteration_data_in_checkpoint": true,

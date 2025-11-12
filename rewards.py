@@ -18,7 +18,7 @@ class DistancePlayerToGround(RewardFunction[AgentID, GameState, float]):
 
     def _get_reward(self, agent: AgentID, state: GameState) -> float:
         # Compensate for inside of ball being unreachable (keep max reward at 1)
-        height = state.cars[agent].physics.position[2]
+        height = min(state.cars[agent].physics.position[2], 1700)
         reward = 0.6 * np.tanh((height - 900) / 500) + 0.4
         return reward
 
