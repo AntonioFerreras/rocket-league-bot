@@ -27,3 +27,9 @@ def dir_to_euler_yzx(direction: np.ndarray) -> np.ndarray:
 
     roll = 0.0
     return np.array([pitch, yaw, roll], dtype=np.float32)
+
+def normalize(x: np.array) -> np.array:
+    norm = np.linalg.norm(x)
+    if norm == 0:
+       return x
+    return x / norm

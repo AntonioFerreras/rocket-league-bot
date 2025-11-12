@@ -10,7 +10,7 @@ pad_team_size = 2
 blue_team_size = team_size
 orange_team_size = team_size if spawn_opponents else 0
 action_repeat = 8
-no_touch_timeout_seconds = 3
+no_touch_timeout_seconds = 6
 game_timeout_seconds = 15
 
 
@@ -49,7 +49,15 @@ def build_rlgym_v2_env():
     from rlgym.rocket_league.rlviser import RLViserRenderer
 
     from math_utils import dir_to_euler_yzx
-    from rewards import DistancePlayerToBallReward, DistanceBallToGoalReward, TouchReward
+    from rewards import (
+        DistancePlayerToBallReward,
+        BallToGoalReward,
+        DistancePlayerToGround,
+        VelocityPlayerToBallReward,
+        TouchReward,
+        ForwardBiasReward,
+        WallPunishment,
+    )
 
     action_parser = RepeatAction(LookupTableAction(), repeats=action_repeat)
     termination_condition = GoalCondition()
@@ -59,15 +67,23 @@ def build_rlgym_v2_env():
     )
 
     goal_reward_weight = 10
-    touch_reward_weight = 1.0
-    distance_player_to_ball_reward_weight = 1.0
-    distance_ball_to_goal_reward_weight = 1.0
+    touch_reward_weight = 4.0
+    distance_player_to_ball_reward_weight = 1.5
+    velocity_player_to_ball_reward_weight = 1.0
+    ball_to_goal_reward_weight = 1.5
+    distance_player_to_ground_reward_weight = 2.0
+    forward_bias_reward_weight = 1.0
+    wall_punishment_weight = 4.0
 
     reward_fn = CombinedReward(
         (GoalReward(), goal_reward_weight),
         (TouchReward(), touch_reward_weight),
         (DistancePlayerToBallReward(), distance_player_to_ball_reward_weight),
-        (DistanceBallToGoalReward(), distance_ball_to_goal_reward_weight),
+        (VelocityPlayerToBallReward(), velocity_player_to_ball_reward_weight),
+        (BallToGoalReward(), ball_to_goal_reward_weight),
+        (DistancePlayerToGround(), distance_player_to_ground_reward_weight),
+        (ForwardBiasReward(), forward_bias_reward_weight),
+        (WallPunishment(), wall_punishment_weight),
     )
 
     obs_builder = DefaultObs(
@@ -236,8 +252,8 @@ if __name__ == "__main__":
         action_space: DefaultActionSpaceType,
         device: str,
     ):
-        dim = 1024
-        num_layers = 4
+        dim = 512
+        num_layers = 3
         return DiscreteFF(
             obs_space[1], 
             action_space[1], 
@@ -247,8 +263,8 @@ if __name__ == "__main__":
         )
 
     def critic_factory(obs_space: DefaultObsSpaceType, device: str):
-        dim = 1024
-        num_layers = 4
+        dim = 512
+        num_layers = 3
         return BasicCritic(
             obs_space[1], 
             (dim,) * num_layers, 
@@ -294,7 +310,7 @@ if __name__ == "__main__":
                 ),
                 metrics_logger_config=WandbMetricsLoggerConfigModel(
                     group="rlgym-learn-testing",
-                    run="simple-bot-train"
+                    run="airdribble-bot"
                 ),
             )
         },

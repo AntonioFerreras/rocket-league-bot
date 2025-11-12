@@ -4,7 +4,23 @@ from typing import List, Dict, Any
 from rlgym.api import RewardFunction, AgentID
 from rlgym.rocket_league.api import GameState
 from rlgym.rocket_league.common_values import BALL_RADIUS, CAR_MAX_SPEED, BLUE_TEAM, ORANGE_TEAM, ORANGE_GOAL_BACK, \
-    BLUE_GOAL_BACK, BALL_MAX_SPEED, BACK_WALL_Y, BACK_NET_Y
+    BLUE_GOAL_BACK, BALL_MAX_SPEED, BACK_WALL_Y, BACK_NET_Y, SIDE_WALL_X, CEILING_Z
+
+from math_utils import normalize
+
+class DistancePlayerToGround(RewardFunction[AgentID, GameState, float]):
+    def reset(self, agents: List[AgentID], initial_state: GameState, shared_info: Dict[str, Any]) -> None:
+        pass
+
+    def get_rewards(self, agents: List[AgentID], state: GameState, is_terminated: Dict[AgentID, bool],
+                    is_truncated: Dict[AgentID, bool], shared_info: Dict[str, Any]) -> Dict[AgentID, float]:
+        return {agent: self._get_reward(agent, state) for agent in agents}
+
+    def _get_reward(self, agent: AgentID, state: GameState) -> float:
+        # Compensate for inside of ball being unreachable (keep max reward at 1)
+        height = state.cars[agent].physics.position[2]
+        reward = 0.6 * np.tanh((height - 900) / 500) + 0.4
+        return reward
 
 class DistancePlayerToBallReward(RewardFunction[AgentID, GameState, float]):
     def reset(self, agents: List[AgentID], initial_state: GameState, shared_info: Dict[str, Any]) -> None:
@@ -15,11 +31,121 @@ class DistancePlayerToBallReward(RewardFunction[AgentID, GameState, float]):
         return {agent: self._get_reward(agent, state) for agent in agents}
 
     def _get_reward(self, agent: AgentID, state: GameState) -> float:
+        height = state.cars[agent].physics.position[2]
+        if height < 25.0:
+            return 0.0
+
         # Compensate for inside of ball being unreachable (keep max reward at 1)
         dist = np.linalg.norm(state.cars[agent].physics.position - state.ball.position) - BALL_RADIUS
-        return np.exp(-0.5 * dist / CAR_MAX_SPEED)  # Inspired by https://arxiv.org/abs/2105.12196
+        # the typical decay for regular gameplay is 0.5, but we use 12.0 to make it really strict for air dribbling.
+        # makes it so it needs to be within 600 uu to get any measurable reward.
+        return np.exp(-12.0 * dist / CAR_MAX_SPEED)  # Inspired by https://arxiv.org/abs/2105.12196
 
-class DistanceBallToGoalReward(RewardFunction[AgentID, GameState, float]):
+
+
+class VelocityPlayerToBallReward(RewardFunction[AgentID, GameState, float]):
+    """
+    A RewardFunction that gives a reward for velocity of car towards ball.
+    Can use trajectory comparison or dot quotient.
+    No reward when car is on the ground.
+    """
+    def __init__(self, include_negative_values: bool = True, use_trajectory_comparison: bool = True,
+                 use_dot_quotient: bool = False):
+        self.include_negative_values = include_negative_values
+        self.use_trajectory_comparison = use_trajectory_comparison
+        self.use_dot_quotient = use_dot_quotient
+
+    def reset(self, agents: List[AgentID], initial_state: GameState, shared_info: Dict[str, Any]) -> None:
+        pass
+
+    def get_rewards(self, agents: List[AgentID], state: GameState, is_terminated: Dict[AgentID, bool],
+                    is_truncated: Dict[AgentID, bool], shared_info: Dict[str, Any]) -> Dict[AgentID, float]:
+        return {agent: self._get_reward(agent, state) for agent in agents}
+
+    def _get_reward(self, agent: AgentID, state: GameState):
+        ball = state.ball
+        car = state.cars[agent].physics
+
+        height = car.position[2]
+        if height < 25.0:
+            return 0.0
+
+        if self.use_trajectory_comparison:
+            curr_dist, min_dist, t = trajectory_comparison(car.position, car.linear_velocity,
+                                                           ball.position, ball.linear_velocity)
+            vel = (curr_dist - min_dist) / t if t != 0 else 0
+            norm_vel = vel / (CAR_MAX_SPEED + BALL_MAX_SPEED)
+            if abs(norm_vel) > 1:  # In case of floating point errors with small t
+                norm_vel = np.sign(norm_vel)
+        elif self.use_dot_quotient:
+            car_to_ball = ball.position - car.position
+            car_to_ball = car_to_ball / np.linalg.norm(car_to_ball)
+
+            # Vector version of v=d/t <=> t=d/v <=> 1/t=v/d which becomes v . d / |d|^2
+            # Max value should be max_speed / ball_radius = 2300 / 92.75 = 24.8
+            vd = np.dot(car_to_ball, car.linear_velocity)
+            dd = np.dot(car_to_ball, ball.linear_velocity)
+            inv_time = vd / dd if dd != 0 else 0
+            norm_vel = inv_time / (CAR_MAX_SPEED / BALL_RADIUS)
+        else:
+            car_to_ball = ball.position - car.position
+            car_to_ball = car_to_ball / np.linalg.norm(car_to_ball)
+
+            vel = np.dot(car_to_ball, car.linear_velocity)
+            norm_vel = vel / CAR_MAX_SPEED
+        if self.include_negative_values:
+            return norm_vel
+        return max(0, norm_vel)
+
+def trajectory_comparison(pos1, vel1, pos2, vel2, check_bounds=True):
+    """
+    Calculate the closest point between two trajectories, defined as the lines:
+      pos1 + t * vel1
+      pos2 + t * vel2
+    """
+    # First, find max time based on field bounds
+    if check_bounds:
+        max_time = np.inf
+        for pos, vel in (pos1, vel1), (pos2, vel2):
+            bounds = np.array([[-SIDE_WALL_X, -BACK_WALL_Y, 0],
+                               [SIDE_WALL_X, BACK_WALL_Y, CEILING_Z]])
+            times = (bounds - pos) / (vel + (vel == 0))
+            times = times[times > 0]
+            t = np.min(times)
+            max_time = min(max_time, t)
+
+    # The distance between the two rays is `||pos1 + t * vel1 - pos2 - t * vel2||`
+    # This is equivalent to `||(pos1 - pos2) + t * (vel1 - vel2)||`
+    pos_diff = pos1 - pos2
+    vel_diff = vel1 - vel2
+
+    # The minimum distance is achieved when the derivative of the distance is 0.
+    # E.g. `d/dt * sqrt((p_x+t*v_x)^2+(p_y+t*v_y)^2+(p_z+t*v_z)^2)=0`
+    # This is equivalent to
+    #    `d/dt * (p_x+t*v_x)^2+(p_y+t*v_y)^2+(p_z+t*v_z)^2=0`
+    # => `2*(p_x+t*v_x)*v_x+2*(p_y+t*v_y)*v_y+2*(p_z+t*v_z)*v_z=0`
+    # => `p_x*v_x+p_y*v_y+p_z*v_z+t*(v_x^2+v_y^2+v_z^2)=0`
+    # => `t=-(p_x*v_x+p_y*v_y+p_z*v_z)/(v_x^2+v_y^2+v_z^2)`
+    denom = np.dot(vel_diff, vel_diff)
+    if denom == 0:
+        t = 0
+    else:
+        t = -np.dot(pos_diff, vel_diff) / denom
+
+    if t > max_time:
+        t = max_time
+
+    # The minimum distance is then the distance at this time.
+    curr_dist = np.linalg.norm(pos_diff)
+    min_dist = np.linalg.norm(pos_diff + t * vel_diff)
+
+    return curr_dist, min_dist, t
+
+class BallToGoalReward(RewardFunction[AgentID, GameState, float]):
+    """
+    A RewardFunction that gives a reward for the ball being close to the goal.
+    Also a reward for travelling towards the goal.
+    """
     def __init__(self, own_goal=False):
         super().__init__()
         self.own_goal = own_goal
@@ -41,15 +167,19 @@ class DistanceBallToGoalReward(RewardFunction[AgentID, GameState, float]):
 
         # Compensate for moving objective to back of net
         dist = np.linalg.norm(state.ball.position - objective) - (BACK_NET_Y - BACK_WALL_Y + BALL_RADIUS)
-        return np.exp(-0.5 * dist / BALL_MAX_SPEED)  # Inspired by https://arxiv.org/abs/2105.12196
+        dist_reward = np.exp(-0.8 * dist / BALL_MAX_SPEED)  # Inspired by https://arxiv.org/abs/2105.12196
+
+        vel_normalized = state.ball.linear_velocity / BALL_MAX_SPEED
+        goal_dir = normalize(objective - state.ball.position)
+        vel_reward = max(0, np.dot(vel_normalized, goal_dir))
+
+        return dist_reward + vel_reward
 
 
-class TouchReward(RewardFunction[AgentID, GameState, float]):
+class ForwardBiasReward(RewardFunction[AgentID, GameState, float]):
     """
-    A RewardFunction that gives a reward when agent touches ball.
-    The more beneath the ball it hits, the higher the reward.
+    A RewardFunction that gives a reward for moving in the direction the car is facing.
     """
-
     def reset(self, agents: List[AgentID], initial_state: GameState, shared_info: Dict[str, Any]) -> None:
         pass
 
@@ -57,10 +187,64 @@ class TouchReward(RewardFunction[AgentID, GameState, float]):
                     is_truncated: Dict[AgentID, bool], shared_info: Dict[str, Any]) -> Dict[AgentID, float]:
         return {agent: self._get_reward(agent, state) for agent in agents}
 
+    def _get_reward(
+        self, agent: AgentID, state: GameState
+    ) -> float:
+        return state.cars[agent].physics.forward.dot(normalize(state.cars[agent].physics.linear_velocity))
+
+class WallPunishment(RewardFunction[AgentID, GameState, float]):
+    """
+    A RewardFunction that gives a punishment when agent is close to a wall.
+    To prevent the agent from driving on walls to avoid low height punishment.
+    """
+    def reset(self, agents: List[AgentID], initial_state: GameState, shared_info: Dict[str, Any]) -> None:
+        pass
+
+    def get_rewards(self, agents: List[AgentID], state: GameState, is_terminated: Dict[AgentID, bool],
+                    is_truncated: Dict[AgentID, bool], shared_info: Dict[str, Any]) -> Dict[AgentID, float]:
+        return {agent: self._get_reward(agent, state) for agent in agents}
+
+    def _get_reward(
+        self, agent: AgentID, state: GameState
+    ) -> float:
+        thresh = 30.0
+        close_to_wall = np.abs(state.cars[agent].physics.position[0]) > SIDE_WALL_X - thresh
+        close_to_wall = close_to_wall or np.abs(state.cars[agent].physics.position[1]) > BACK_WALL_Y - thresh
+        return -1.0 if close_to_wall else 0.0
+
+class TouchReward(RewardFunction[AgentID, GameState, float]):
+    """
+    A RewardFunction that gives a reward when agent touches ball.
+    The more beneath the ball it hits, the higher the reward.
+    Also gives a optional reward for acceleration of the ball.
+    Does not give reward when car is on the ground.
+    """
+
+    def __init__(self, acceleration_reward: float = 0.0):
+        self.acceleration_reward = acceleration_reward
+        self.prev_ball = None
+
+    def reset(self, agents: List[AgentID], initial_state: GameState, shared_info: Dict[str, Any]) -> None:
+        self.prev_ball = initial_state.ball
+
+    def get_rewards(self, agents: List[AgentID], state: GameState, is_terminated: Dict[AgentID, bool],
+                    is_truncated: Dict[AgentID, bool], shared_info: Dict[str, Any]) -> Dict[AgentID, float]:
+        return {agent: self._get_reward(agent, state) for agent in agents}
+
     def _get_reward(self, agent: AgentID, state: GameState) -> float:
         hit_ball = 1. if state.cars[agent].ball_touches > 0 else 0.
+
+
+        height = state.cars[agent].physics.position[2]
+        if height < 25.0:
+            return 0.0
+
         to_ball = state.ball.position - state.cars[agent].physics.position
         to_ball = to_ball / np.linalg.norm(to_ball)
         vertical = to_ball[2]
-        vertical = max(0.25, min(vertical, 0.9))
-        return hit_ball * vertical
+        vertical = max(0.1, min(vertical, 0.9))
+
+        acceleration = np.linalg.norm(state.ball.linear_velocity - self.prev_ball.linear_velocity) / BALL_MAX_SPEED
+
+        self.prev_ball = state.ball
+        return hit_ball * vertical + self.acceleration_reward * acceleration
