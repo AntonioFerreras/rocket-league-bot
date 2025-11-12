@@ -8,6 +8,9 @@ from rlgym.rocket_league.common_values import BALL_RADIUS, CAR_MAX_SPEED, BLUE_T
 
 from math_utils import normalize
 
+def height_sigmoid(height: float) -> float:
+    return 0.5 * np.tanh((height - 900) / 250) + 0.5
+
 class DistancePlayerToGround(RewardFunction[AgentID, GameState, float]):
     def reset(self, agents: List[AgentID], initial_state: GameState, shared_info: Dict[str, Any]) -> None:
         pass
@@ -39,7 +42,10 @@ class DistancePlayerToBallReward(RewardFunction[AgentID, GameState, float]):
         dist = np.linalg.norm(state.cars[agent].physics.position - state.ball.position) - BALL_RADIUS
         # the typical decay for regular gameplay is 0.5, but we use 12.0 to make it really strict for air dribbling.
         # makes it so it needs to be within 600 uu to get any measurable reward.
-        return np.exp(-12.0 * dist / CAR_MAX_SPEED)  # Inspired by https://arxiv.org/abs/2105.12196
+        dist_reward = np.exp(-12.0 * dist / CAR_MAX_SPEED)  # Inspired by https://arxiv.org/abs/2105.12196
+
+        height_reward = height_sigmoid(state.ball.position[2])
+        return dist_reward * height_reward
 
 
 
@@ -95,7 +101,9 @@ class VelocityPlayerToBallReward(RewardFunction[AgentID, GameState, float]):
             norm_vel = vel / CAR_MAX_SPEED
         if self.include_negative_values:
             return norm_vel
-        return max(0, norm_vel)
+        vel_reward = max(0, norm_vel)
+        height_reward = height_sigmoid(state.ball.position[2])
+        return vel_reward * height_reward
 
 def trajectory_comparison(pos1, vel1, pos2, vel2, check_bounds=True):
     """
