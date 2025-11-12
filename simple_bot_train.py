@@ -10,16 +10,23 @@ pad_team_size = 2
 blue_team_size = team_size
 orange_team_size = team_size if spawn_opponents else 0
 action_repeat = 8
-no_touch_timeout_seconds = 30
-game_timeout_seconds = 300
+no_touch_timeout_seconds = 3
+game_timeout_seconds = 15
 
-goal_reward_weight = 10
-touch_reward_weight = 0.1
+
+
+
+
 
 
 def build_rlgym_v2_env():
+    import random
+    from typing import Dict, Any
     import numpy as np
+    from rlgym.rocket_league.common_values import BALL_RESTING_HEIGHT, BLUE_TEAM
     from rlgym.api import RLGym
+    from rlgym.api import StateMutator
+    from rlgym.rocket_league.api import GameState
     from rlgym.rocket_league import common_values
     from rlgym.rocket_league.action_parsers import LookupTableAction, RepeatAction
     from rlgym.rocket_league.done_conditions import (
@@ -32,7 +39,6 @@ def build_rlgym_v2_env():
     from rlgym.rocket_league.reward_functions import (
         CombinedReward,
         GoalReward,
-        TouchReward,
     )
     from rlgym.rocket_league.sim import RocketSimEngine
     from rlgym.rocket_league.state_mutators import (
@@ -41,7 +47,9 @@ def build_rlgym_v2_env():
         MutatorSequence,
     )
     from rlgym.rocket_league.rlviser import RLViserRenderer
-    
+
+    from math_utils import dir_to_euler_yzx
+    from rewards import DistancePlayerToBallReward, DistanceBallToGoalReward, TouchReward
 
     action_parser = RepeatAction(LookupTableAction(), repeats=action_repeat)
     termination_condition = GoalCondition()
@@ -50,7 +58,17 @@ def build_rlgym_v2_env():
         TimeoutCondition(timeout_seconds=game_timeout_seconds),
     )
 
-    reward_fn = CombinedReward((GoalReward(), goal_reward_weight), (TouchReward(), touch_reward_weight))
+    goal_reward_weight = 10
+    touch_reward_weight = 1.0
+    distance_player_to_ball_reward_weight = 1.0
+    distance_ball_to_goal_reward_weight = 1.0
+
+    reward_fn = CombinedReward(
+        (GoalReward(), goal_reward_weight),
+        (TouchReward(), touch_reward_weight),
+        (DistancePlayerToBallReward(), distance_player_to_ball_reward_weight),
+        (DistanceBallToGoalReward(), distance_ball_to_goal_reward_weight),
+    )
 
     obs_builder = DefaultObs(
         zero_padding=pad_team_size,
@@ -67,9 +85,92 @@ def build_rlgym_v2_env():
         boost_coef=1 / 100.0,
     )
 
+    random.seed(42)
+
+    class AirDribbleMutator(StateMutator[GameState]):
+        """
+        A StateMutator that sets up the game state for a kickoff.
+        """
+
+
+        def apply(self, state: GameState, shared_info: Dict[str, Any]) -> None:
+
+            spawn_min_x = -3200
+            spawn_max_x = 3200
+
+            spawn_min_y = -2000
+            spawn_max_y = 3600
+            
+            spawn_min_z = 700
+            spawn_max_z = 1700
+
+            car_min_height_under_ball = 500
+            car_max_height_under_ball = 1000
+            car_x_radius = 200
+            car_y_radius = 600
+            car_dir_noise_radius = np.pi/8
+
+            ball_vel_xy_noise_radius = 250
+            ball_vel_z_min = 100
+            ball_vel_z_max = 950
+
+            car_vel_noise_radius = 230
+            car_speed_min = 50
+            car_speed_max = 850
+
+
+            ball_x = random.uniform(spawn_min_x, spawn_max_x)
+            ball_y = random.uniform(spawn_min_y, spawn_max_y)
+            ball_z = random.uniform(spawn_min_z, spawn_max_z)
+
+            ball_vel = np.array([
+                random.uniform(-ball_vel_xy_noise_radius, ball_vel_xy_noise_radius), 
+                random.uniform(-ball_vel_xy_noise_radius, ball_vel_xy_noise_radius), 
+                random.uniform(ball_vel_z_min, ball_vel_z_max)
+            ], dtype=np.float32)
+
+            state.ball.position = np.array([ball_x, ball_y, ball_z], dtype=np.float32)
+
+            # add a component of ball velocity in direction of the goal
+            objective = np.array(common_values.ORANGE_GOAL_BACK) - state.ball.position
+            objective = objective / np.linalg.norm(objective)
+            objective[2] = 0.0
+            ball_vel = ball_vel + objective * random.uniform(100, 800)
+
+            state.ball.linear_velocity = ball_vel
+            state.ball.angular_velocity = np.zeros(3, dtype=np.float32)
+            
+
+            for car in state.cars.values():
+                pos_x = ball_x + random.uniform(-car_x_radius, car_x_radius)
+                pos_y = ball_y + random.uniform(-car_y_radius, 100) # make car behind ball most of the time
+                pos_z = ball_z - random.uniform(car_min_height_under_ball, car_max_height_under_ball)
+
+                # clamp car pos to be within spawn limits
+                pos_x = max(spawn_min_x, min(pos_x, spawn_max_x))
+                pos_y = max(spawn_min_y, min(pos_y, spawn_max_y))
+                pos_z = max(400, min(pos_z, spawn_max_z))
+
+
+                
+                car.physics.position = np.array([pos_x, pos_y, pos_z], dtype=np.float32)
+
+                to_ball = state.ball.position - car.physics.position + random.uniform(-car_vel_noise_radius, car_vel_noise_radius)
+                to_ball = to_ball / np.linalg.norm(to_ball)
+                car_vel = to_ball * random.uniform(car_speed_min, car_speed_max)
+
+                car.physics.linear_velocity = car_vel
+                car.physics.angular_velocity = np.zeros(3, dtype=np.float32)
+                # Aim car toward the ball
+                to_ball = state.ball.position - car.physics.position 
+                car.physics.euler_angles = dir_to_euler_yzx(to_ball) + random.uniform(-car_dir_noise_radius, car_dir_noise_radius)
+                car.boost_amount = 100.0
+                car.air_time_since_jump = 999.0 # start with no flip
+                car.has_jumped = True
+
     state_mutator = MutatorSequence(
         FixedTeamSizeMutator(blue_size=blue_team_size, orange_size=orange_team_size),
-        KickoffMutator(),
+        AirDribbleMutator(),
     )
     return RLGym(
         state_mutator=state_mutator,
