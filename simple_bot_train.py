@@ -205,6 +205,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--resume_ckpt", type=str, default=None)
     parser.add_argument("--render", action="store_true")
+    parser.add_argument("--run_name", type=str, default="airdribble-bot")
     args = parser.parse_args()
     
     from typing import Tuple
@@ -310,7 +311,7 @@ if __name__ == "__main__":
                 ),
                 metrics_logger_config=WandbMetricsLoggerConfigModel(
                     group="rlgym-learn-testing",
-                    run="airdribble-bot"
+                    run=args.run_name
                 ),
             )
         },
