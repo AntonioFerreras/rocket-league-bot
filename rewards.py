@@ -1,6 +1,6 @@
 import numpy as np
-from typing import List, Dict, Any
-
+from typing import List, Dict, Any, Callable
+import math
 from rlgym.api import RewardFunction, AgentID
 from rlgym.rocket_league.api import GameState
 from rlgym.rocket_league.common_values import BALL_RADIUS, CAR_MAX_SPEED, BLUE_TEAM, ORANGE_TEAM, ORANGE_GOAL_BACK, \
@@ -25,6 +25,60 @@ class DistancePlayerToGround(RewardFunction[AgentID, GameState, float]):
         reward = 0.6 * np.tanh((height - 900) / 500) + 0.4
         return reward
 
+class PlayerFallPunishment(RewardFunction[AgentID, GameState, float]):
+    def reset(self, agents: List[AgentID], initial_state: GameState, shared_info: Dict[str, Any]) -> None:
+        pass
+
+    def get_rewards(self, agents: List[AgentID], state: GameState, is_terminated: Dict[AgentID, bool],
+                    is_truncated: Dict[AgentID, bool], shared_info: Dict[str, Any]) -> Dict[AgentID, float]:
+        return {agent: self._get_reward(agent, state) for agent in agents}
+
+    def _get_reward(self, agent: AgentID, state: GameState) -> float:
+        # Compensate for inside of ball being unreachable (keep max reward at 1)
+        z_fall = state.cars[agent].physics.linear_velocity[2]
+        if z_fall > -50: z_fall = 0
+        punish = 5.0 * z_fall / CAR_MAX_SPEED
+        return punish
+
+class BoostChangeReward(RewardFunction[AgentID, GameState, float]):
+    def __init__(self, gain_weight: float = 0.0, lose_weight=1.0,
+                 activation_fn: Callable[[float], float] = lambda x: math.sqrt(0.01 * x)):
+        """
+        Reward function that rewards agents for increasing their boost and penalizes them for decreasing it.
+
+        :param gain_weight: Weight to apply to the reward when the agent gains boost
+        :param lose_weight: Weight to apply to the reward when the agent loses boost
+        :param activation_fn: Activation function to apply to the boost value before calculating the reward. Default is
+                              the square root function so that increasing boost is more important when boost is low.
+        """
+        self.gain_weight = gain_weight
+        self.lose_weight = lose_weight
+        self.activation_fn = activation_fn
+
+        self.prev_values = None
+
+    def reset(self, agents: List[AgentID], initial_state: GameState, shared_info: Dict[str, Any]) -> None:
+        self.prev_values = {
+            agent: self.activation_fn(initial_state.cars[agent].boost_amount)
+            for agent in agents
+        }
+
+    def get_rewards(self, agents: List[AgentID], state: GameState, is_terminated: Dict[AgentID, bool],
+                    is_truncated: Dict[AgentID, bool], shared_info: Dict[str, Any]) -> Dict[AgentID, float]:
+        rewards = {}
+        for agent in agents:
+            current_value = self.activation_fn(state.cars[agent].boost_amount)
+            delta = current_value - self.prev_values[agent]
+            if delta > 0:
+                rewards[agent] = delta * self.gain_weight
+            elif delta < 0:
+                rewards[agent] = delta * self.lose_weight
+            else:
+                rewards[agent] = 0
+            self.prev_values[agent] = current_value
+
+        return rewards
+
 class DistancePlayerToBallReward(RewardFunction[AgentID, GameState, float]):
     def reset(self, agents: List[AgentID], initial_state: GameState, shared_info: Dict[str, Any]) -> None:
         pass
@@ -34,17 +88,16 @@ class DistancePlayerToBallReward(RewardFunction[AgentID, GameState, float]):
         return {agent: self._get_reward(agent, state) for agent in agents}
 
     def _get_reward(self, agent: AgentID, state: GameState) -> float:
-        height = state.cars[agent].physics.position[2]
-        if height < 25.0:
+        if state.cars[agent].physics.position[2] < 200.0 or state.ball.position[2] < 200.0:
             return 0.0
 
         # Compensate for inside of ball being unreachable (keep max reward at 1)
-        dist = np.linalg.norm(state.cars[agent].physics.position - state.ball.position) - BALL_RADIUS
+        dist = np.linalg.norm(state.cars[agent].physics.position - (state.ball.position + np.array([0, 0, -100]))) - BALL_RADIUS
         # the typical decay for regular gameplay is 0.5, but we use 12.0 to make it really strict for air dribbling.
         # makes it so it needs to be within 600 uu to get any measurable reward.
         dist_reward = np.exp(-12.0 * dist / CAR_MAX_SPEED)  # Inspired by https://arxiv.org/abs/2105.12196
 
-        height_reward = height_sigmoid(state.ball.position[2])
+        height_reward = height_sigmoid(state.cars[agent].physics.position[2])
         return dist_reward * height_reward
 
 
@@ -72,8 +125,7 @@ class VelocityPlayerToBallReward(RewardFunction[AgentID, GameState, float]):
         ball = state.ball
         car = state.cars[agent].physics
 
-        height = car.position[2]
-        if height < 25.0:
+        if car.position[2] < 200.0 or ball.position[2] < 200.0:
             return 0.0
 
         if self.use_trajectory_comparison:
@@ -102,7 +154,7 @@ class VelocityPlayerToBallReward(RewardFunction[AgentID, GameState, float]):
         if self.include_negative_values:
             return norm_vel
         vel_reward = max(0, norm_vel)
-        height_reward = height_sigmoid(state.ball.position[2])
+        height_reward = height_sigmoid(state.cars[agent].physics.position[2])
         return vel_reward * height_reward
 
 def trajectory_comparison(pos1, vel1, pos2, vel2, check_bounds=True):
@@ -200,9 +252,10 @@ class ForwardBiasReward(RewardFunction[AgentID, GameState, float]):
     ) -> float:
         return state.cars[agent].physics.forward.dot(normalize(state.cars[agent].physics.linear_velocity))
 
-class WallPunishment(RewardFunction[AgentID, GameState, float]):
+class ZoneReward(RewardFunction[AgentID, GameState, float]):
     """
-    A RewardFunction that gives a punishment when agent is close to a wall.
+    A RewardFunction that gives a punishment when agent is close to a wall, ceiling, or ground.
+    Gives reward when in a good height range.
     To prevent the agent from driving on walls to avoid low height punishment.
     """
     def reset(self, agents: List[AgentID], initial_state: GameState, shared_info: Dict[str, Any]) -> None:
@@ -215,20 +268,25 @@ class WallPunishment(RewardFunction[AgentID, GameState, float]):
     def _get_reward(
         self, agent: AgentID, state: GameState
     ) -> float:
-        thresh = 30.0
+        thresh = 300.0
         close_to_wall = np.abs(state.cars[agent].physics.position[0]) > SIDE_WALL_X - thresh
         close_to_wall = close_to_wall or np.abs(state.cars[agent].physics.position[1]) > BACK_WALL_Y - thresh
-        return -1.0 if close_to_wall else 0.0
+        close_to_wall = close_to_wall or state.cars[agent].physics.position[2] > CEILING_Z - thresh*1.5
+        close_to_wall = close_to_wall or state.cars[agent].physics.position[2] < thresh
+        if close_to_wall:
+            return -1.0
+        height = state.cars[agent].physics.position[2]
+        height_reward = height_sigmoid(height)
+        return height_reward
 
 class TouchReward(RewardFunction[AgentID, GameState, float]):
     """
     A RewardFunction that gives a reward when agent touches ball.
     The more beneath the ball it hits, the higher the reward.
-    Also gives a optional reward for acceleration of the ball.
-    Does not give reward when car is on the ground.
+    Also gives an optional reward for accelerating the ball upward.
     """
 
-    def __init__(self, acceleration_reward: float = 0.0):
+    def __init__(self, acceleration_reward: float = 1.0):
         self.acceleration_reward = acceleration_reward
         self.prev_ball = None
 
@@ -243,16 +301,18 @@ class TouchReward(RewardFunction[AgentID, GameState, float]):
         hit_ball = 1. if state.cars[agent].ball_touches > 0 else 0.
 
 
-        height = state.cars[agent].physics.position[2]
-        if height < 25.0:
+        if state.cars[agent].physics.position[2] < 200.0 or state.ball.position[2] < 200.0:
             return 0.0
 
         to_ball = state.ball.position - state.cars[agent].physics.position
         to_ball = to_ball / np.linalg.norm(to_ball)
         vertical = to_ball[2]
-        vertical = max(0.1, min(vertical, 0.9))
+        vertical = max(0.0, min(vertical, 0.9))
 
-        acceleration = np.linalg.norm(state.ball.linear_velocity - self.prev_ball.linear_velocity) / BALL_MAX_SPEED
+        # measure how much upward velocity direction it gave the ball
+        acceleration = (state.ball.linear_velocity - self.prev_ball.linear_velocity) / BALL_MAX_SPEED
+        accel_dir_z = normalize(acceleration)[2]
+
 
         self.prev_ball = state.ball
-        return hit_ball * vertical + self.acceleration_reward * acceleration
+        return hit_ball * vertical + self.acceleration_reward * accel_dir_z

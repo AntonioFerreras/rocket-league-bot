@@ -10,9 +10,9 @@ pad_team_size = 2
 blue_team_size = team_size
 orange_team_size = team_size if spawn_opponents else 0
 action_repeat = 8
-no_touch_timeout_seconds = 6
-game_timeout_seconds = 15
-
+no_touch_timeout_seconds = 5
+game_timeout_seconds = 100
+render_speed = 3.0
 
 
 
@@ -21,18 +21,16 @@ game_timeout_seconds = 15
 
 def build_rlgym_v2_env():
     import random
-    from typing import Dict, Any
+    from typing import Dict, Any, List
     import numpy as np
     from rlgym.rocket_league.common_values import BALL_RESTING_HEIGHT, BLUE_TEAM
-    from rlgym.api import RLGym
-    from rlgym.api import StateMutator
+    from rlgym.api import RLGym, StateMutator, DoneCondition, AgentID
     from rlgym.rocket_league.api import GameState
     from rlgym.rocket_league import common_values
     from rlgym.rocket_league.action_parsers import LookupTableAction, RepeatAction
     from rlgym.rocket_league.done_conditions import (
         AnyCondition,
         GoalCondition,
-        NoTouchTimeoutCondition,
         TimeoutCondition,
     )
     from rlgym.rocket_league.obs_builders import DefaultObs
@@ -56,8 +54,38 @@ def build_rlgym_v2_env():
         VelocityPlayerToBallReward,
         TouchReward,
         ForwardBiasReward,
-        WallPunishment,
+        ZoneReward,
+        PlayerFallPunishment,
+        BoostChangeReward,
     )
+
+    class NoTouchTimeoutCondition(DoneCondition[AgentID, GameState]):
+        """
+        A DoneCondition that is satisfied when no car has touched the ball for a specified amount of time.
+        Timer starts when the ball is touched for the first time.
+        """
+
+        def __init__(self, timeout_seconds: float):
+            """
+            :param timeout_seconds: Timeout in seconds
+            """
+            self.timeout_seconds = timeout_seconds
+            self.tick_timer = None
+
+        def reset(self, agents: List[AgentID], initial_state: GameState, shared_info: Dict[str, Any]) -> None:
+            self.tick_timer = None
+
+        def is_done(self, agents: List[AgentID], state: GameState, shared_info: Dict[str, Any]) -> Dict[AgentID, bool]:
+            if any(car.ball_touches > 0 for car in state.cars.values()):
+                self.tick_timer = self.timeout_seconds * common_values.TICKS_PER_SECOND
+                done = False
+            else:
+                if self.tick_timer is None:
+                    return {agent: False for agent in agents}
+                self.tick_timer -= 1
+                done = self.tick_timer <= 0
+
+            return {agent: done for agent in agents}
 
     action_parser = RepeatAction(LookupTableAction(), repeats=action_repeat)
     termination_condition = GoalCondition()
@@ -66,15 +94,17 @@ def build_rlgym_v2_env():
         TimeoutCondition(timeout_seconds=game_timeout_seconds),
     )
 
-    goal_reward_weight = 10
-    touch_reward_weight = 4.0
-    distance_player_to_ball_reward_weight = 1.5
-    velocity_player_to_ball_reward_weight = 1.0
-    ball_to_goal_reward_weight = 1.5
-    distance_player_to_ground_reward_weight = 1.0
-    forward_bias_reward_weight = 1.0
-    wall_punishment_weight = 2.0
-
+    goal_reward_weight = 10*0
+    touch_reward_weight = 15.0
+    distance_player_to_ball_reward_weight = 2.5
+    velocity_player_to_ball_reward_weight = 0.5
+    ball_to_goal_reward_weight = 1.5 * 0
+    distance_player_to_ground_reward_weight = 1.5*0
+    forward_bias_reward_weight = 0.5*0
+    zone_reward_weight = 1.0
+    player_fall_punishment_weight = 5.0*0
+    boost_change_reward_weight = 0.5*0
+    
     reward_fn = CombinedReward(
         (GoalReward(), goal_reward_weight),
         (TouchReward(), touch_reward_weight),
@@ -83,7 +113,9 @@ def build_rlgym_v2_env():
         (BallToGoalReward(), ball_to_goal_reward_weight),
         (DistancePlayerToGround(), distance_player_to_ground_reward_weight),
         (ForwardBiasReward(), forward_bias_reward_weight),
-        (WallPunishment(), wall_punishment_weight),
+        (ZoneReward(), zone_reward_weight),
+        (PlayerFallPunishment(), player_fall_punishment_weight),
+        (BoostChangeReward(), boost_change_reward_weight),
     )
 
     obs_builder = DefaultObs(
@@ -101,7 +133,7 @@ def build_rlgym_v2_env():
         boost_coef=1 / 100.0,
     )
 
-    random.seed(42)
+    random.seed(123123)
 
     class AirDribbleMutator(StateMutator[GameState]):
         """
@@ -110,6 +142,7 @@ def build_rlgym_v2_env():
 
 
         def apply(self, state: GameState, shared_info: Dict[str, Any]) -> None:
+            state.config.boost_consumption = 0.001
 
             spawn_min_x = -3200
             spawn_max_x = 3200
@@ -117,20 +150,21 @@ def build_rlgym_v2_env():
             spawn_min_y = -2000
             spawn_max_y = 3600
             
-            spawn_min_z = 700
+            spawn_min_z = 1400
             spawn_max_z = 1700
 
             car_min_height_under_ball = 500
             car_max_height_under_ball = 1000
-            car_x_radius = 200
-            car_y_radius = 600
+            car_x_radius = 800
+            car_y_min = -800
+            car_y_max = -800
             car_dir_noise_radius = np.pi/8
 
-            ball_vel_xy_noise_radius = 250
+            ball_vel_xy_noise_radius = 100
             ball_vel_z_min = 100
             ball_vel_z_max = 950
 
-            car_vel_noise_radius = 230
+            car_vel_noise_radius = 130
             car_speed_min = 50
             car_speed_max = 850
 
@@ -153,13 +187,13 @@ def build_rlgym_v2_env():
             objective[2] = 0.0
             ball_vel = ball_vel + objective * random.uniform(100, 800)
 
-            state.ball.linear_velocity = ball_vel
+            state.ball.linear_velocity = ball_vel*0
             state.ball.angular_velocity = np.zeros(3, dtype=np.float32)
             
 
             for car in state.cars.values():
                 pos_x = ball_x + random.uniform(-car_x_radius, car_x_radius)
-                pos_y = ball_y + random.uniform(-car_y_radius, 100) # make car behind ball most of the time
+                pos_y = ball_y + random.uniform(car_y_min, car_y_max) # make car behind ball most of the time
                 pos_z = ball_z - random.uniform(car_min_height_under_ball, car_max_height_under_ball)
 
                 # clamp car pos to be within spawn limits
@@ -168,17 +202,17 @@ def build_rlgym_v2_env():
                 pos_z = max(400, min(pos_z, spawn_max_z))
 
 
-                
+                pos_z = 17
                 car.physics.position = np.array([pos_x, pos_y, pos_z], dtype=np.float32)
 
                 to_ball = state.ball.position - car.physics.position + random.uniform(-car_vel_noise_radius, car_vel_noise_radius)
                 to_ball = to_ball / np.linalg.norm(to_ball)
                 car_vel = to_ball * random.uniform(car_speed_min, car_speed_max)
 
-                car.physics.linear_velocity = car_vel
+                car.physics.linear_velocity = car_vel*0
                 car.physics.angular_velocity = np.zeros(3, dtype=np.float32)
                 # Aim car toward the ball
-                to_ball = state.ball.position - car.physics.position 
+                to_ball = np.array([0, 0, 0]) # state.ball.position - car.physics.position 
                 car.physics.euler_angles = dir_to_euler_yzx(to_ball) + random.uniform(-car_dir_noise_radius, car_dir_noise_radius)
                 car.boost_amount = 100.0
                 car.air_time_since_jump = 999.0 # start with no flip
@@ -293,7 +327,7 @@ if __name__ == "__main__":
         process_config=ProcessConfigModel(
             n_proc=64 if not args.render else 1,  # Number of processes to spawn to run environments. Increasing will use more RAM but should increase steps per second, up to a point
             render=args.render,
-            render_delay=0 if not args.render else action_repeat/120.0,
+            render_delay=0 if not args.render else action_repeat/120.0/render_speed,
         ),
         agent_controllers_config={
             "PPO1": PPOAgentControllerConfigModel(
