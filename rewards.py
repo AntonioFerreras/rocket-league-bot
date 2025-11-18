@@ -92,7 +92,7 @@ class DistancePlayerToBallReward(RewardFunction[AgentID, GameState, float]):
             return 0.0
 
         # Compensate for inside of ball being unreachable (keep max reward at 1)
-        dist = np.linalg.norm(state.cars[agent].physics.position - (state.ball.position + np.array([0, 0, -100]))) - BALL_RADIUS
+        dist = np.linalg.norm(state.cars[agent].physics.position - (state.ball.position + np.array([0, 0, -50]))) - BALL_RADIUS
         # the typical decay for regular gameplay is 0.5, but we use 12.0 to make it really strict for air dribbling.
         # makes it so it needs to be within 600 uu to get any measurable reward.
         dist_reward = np.exp(-12.0 * dist / CAR_MAX_SPEED)  # Inspired by https://arxiv.org/abs/2105.12196
@@ -268,14 +268,44 @@ class ZoneReward(RewardFunction[AgentID, GameState, float]):
     def _get_reward(
         self, agent: AgentID, state: GameState
     ) -> float:
-        thresh = 300.0
+        thresh = 200.0
+        height_reward_weight = 0.0
         close_to_wall = np.abs(state.cars[agent].physics.position[0]) > SIDE_WALL_X - thresh
         close_to_wall = close_to_wall or np.abs(state.cars[agent].physics.position[1]) > BACK_WALL_Y - thresh
-        close_to_wall = close_to_wall or state.cars[agent].physics.position[2] > CEILING_Z - thresh*1.5
+        close_to_wall = close_to_wall or state.cars[agent].physics.position[2] > CEILING_Z - thresh
         close_to_wall = close_to_wall or state.cars[agent].physics.position[2] < thresh
         if close_to_wall:
-            return -1.0
+            return -2.5
         height = state.cars[agent].physics.position[2]
+        height_reward = height_sigmoid(height)
+        return height_reward*height_reward_weight
+
+class BallZoneReward(RewardFunction[AgentID, GameState, float]):
+    """
+    A RewardFunction that gives a punishment when ball is close to a wall, ceiling, or ground.
+    Gives reward when in a good height range.
+    To prevent the ball from driving on walls to avoid low height punishment.
+    """
+    def reset(self, agents: List[AgentID], initial_state: GameState, shared_info: Dict[str, Any]) -> None:
+        pass
+
+    def get_rewards(self, agents: List[AgentID], state: GameState, is_terminated: Dict[AgentID, bool],
+                    is_truncated: Dict[AgentID, bool], shared_info: Dict[str, Any]) -> Dict[AgentID, float]:
+        return {agent: self._get_reward(agent, state) for agent in agents}
+
+    def _get_reward(
+        self, agent: AgentID, state: GameState
+    ) -> float:
+        thresh_ceiling = 110.0
+        thresh_floor = 300.0
+        thresh_wall = 200.0
+        close_to_wall = np.abs(state.ball.position[0]) > SIDE_WALL_X - thresh_wall
+        close_to_wall = close_to_wall or np.abs(state.ball.position[1]) > BACK_WALL_Y - thresh_wall
+        close_to_wall = close_to_wall or state.ball.position[2] > CEILING_Z - thresh_ceiling
+        close_to_wall = close_to_wall or state.ball.position[2] < thresh_floor
+        if close_to_wall:
+            return -2.5*0
+        height = state.ball.position[2]
         height_reward = height_sigmoid(height)
         return height_reward
 
@@ -307,7 +337,7 @@ class TouchReward(RewardFunction[AgentID, GameState, float]):
         to_ball = state.ball.position - state.cars[agent].physics.position
         to_ball = to_ball / np.linalg.norm(to_ball)
         vertical = to_ball[2]
-        vertical = max(0.0, min(vertical, 0.9))
+        vertical = max(0.0, min(vertical, 0.7071))/0.7071 
 
         # measure how much upward velocity direction it gave the ball
         acceleration = (state.ball.linear_velocity - self.prev_ball.linear_velocity) / BALL_MAX_SPEED

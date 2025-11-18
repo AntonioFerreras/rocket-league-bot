@@ -11,8 +11,9 @@ blue_team_size = team_size
 orange_team_size = team_size if spawn_opponents else 0
 action_repeat = 8
 no_touch_timeout_seconds = 5
+ball_hit_ground_timeout_seconds = 2
 game_timeout_seconds = 100
-render_speed = 3.0
+render_speed = 1.0
 
 
 
@@ -55,6 +56,7 @@ def build_rlgym_v2_env():
         TouchReward,
         ForwardBiasReward,
         ZoneReward,
+        BallZoneReward,
         PlayerFallPunishment,
         BoostChangeReward,
     )
@@ -65,43 +67,76 @@ def build_rlgym_v2_env():
         Timer starts when the ball is touched for the first time.
         """
 
+        def __init__(self, timeout_seconds: float, freeze_start_tick: bool = False):
+            """
+            :param timeout_seconds: Timeout in seconds
+            """
+            self.timeout_seconds = timeout_seconds
+            self.last_touch_tick = None
+            self.freeze_start_tick = freeze_start_tick
+
+        def reset(self, agents: List[AgentID], initial_state: GameState, shared_info: Dict[str, Any]) -> None:
+            if self.freeze_start_tick:
+                self.last_touch_tick = None
+            else:
+                self.last_touch_tick = initial_state.tick_count
+
+        def is_done(self, agents: List[AgentID], state: GameState, shared_info: Dict[str, Any]) -> Dict[AgentID, bool]:
+            if any(car.ball_touches > 0 for car in state.cars.values()):
+                self.last_touch_tick = state.tick_count
+                done = False
+            else:
+                if self.last_touch_tick is None:
+                    return {agent: False for agent in agents}
+                time_elapsed = (state.tick_count - self.last_touch_tick) / common_values.TICKS_PER_SECOND
+                done = time_elapsed >= self.timeout_seconds
+
+            return {agent: done for agent in agents}
+
+    class BallHitGroundTimeoutCondition(DoneCondition[AgentID, GameState]):
+        """
+        A DoneCondition that is satisfied a few seconds after the ball hits the ground.
+        """
+
         def __init__(self, timeout_seconds: float):
             """
             :param timeout_seconds: Timeout in seconds
             """
             self.timeout_seconds = timeout_seconds
-            self.tick_timer = None
+            self.last_hit_ground_tick = None
 
         def reset(self, agents: List[AgentID], initial_state: GameState, shared_info: Dict[str, Any]) -> None:
-            self.tick_timer = None
+            self.last_hit_ground_tick = None
 
         def is_done(self, agents: List[AgentID], state: GameState, shared_info: Dict[str, Any]) -> Dict[AgentID, bool]:
-            if any(car.ball_touches > 0 for car in state.cars.values()):
-                self.tick_timer = self.timeout_seconds * common_values.TICKS_PER_SECOND
+            if state.ball.position[2] < BALL_RESTING_HEIGHT*1.5:
+                self.last_hit_ground_tick = state.tick_count
                 done = False
             else:
-                if self.tick_timer is None:
+                if self.last_hit_ground_tick is None:
                     return {agent: False for agent in agents}
-                self.tick_timer -= 1
-                done = self.tick_timer <= 0
+                time_elapsed = (state.tick_count - self.last_hit_ground_tick) / common_values.TICKS_PER_SECOND
+                done = time_elapsed >= self.timeout_seconds
 
             return {agent: done for agent in agents}
 
     action_parser = RepeatAction(LookupTableAction(), repeats=action_repeat)
     termination_condition = GoalCondition()
     truncation_condition = AnyCondition(
-        NoTouchTimeoutCondition(timeout_seconds=no_touch_timeout_seconds),
-        TimeoutCondition(timeout_seconds=game_timeout_seconds),
+        NoTouchTimeoutCondition(timeout_seconds=no_touch_timeout_seconds, freeze_start_tick=False),
+        TimeoutCondition(timeout_seconds=game_timeout_seconds), 
+        BallHitGroundTimeoutCondition(timeout_seconds=ball_hit_ground_timeout_seconds),
     )
 
     goal_reward_weight = 10*0
-    touch_reward_weight = 15.0
-    distance_player_to_ball_reward_weight = 2.5
-    velocity_player_to_ball_reward_weight = 0.5
+    touch_reward_weight = 8.0
+    distance_player_to_ball_reward_weight = 2.5*0.3
+    velocity_player_to_ball_reward_weight = 0.5*0.3
     ball_to_goal_reward_weight = 1.5 * 0
     distance_player_to_ground_reward_weight = 1.5*0
     forward_bias_reward_weight = 0.5*0
     zone_reward_weight = 1.0
+    ball_zone_reward_weight = 2.0
     player_fall_punishment_weight = 5.0*0
     boost_change_reward_weight = 0.5*0
     
@@ -116,6 +151,7 @@ def build_rlgym_v2_env():
         (ZoneReward(), zone_reward_weight),
         (PlayerFallPunishment(), player_fall_punishment_weight),
         (BoostChangeReward(), boost_change_reward_weight),
+        (BallZoneReward(), ball_zone_reward_weight),
     )
 
     obs_builder = DefaultObs(
@@ -150,23 +186,23 @@ def build_rlgym_v2_env():
             spawn_min_y = -2000
             spawn_max_y = 3600
             
-            spawn_min_z = 1400
-            spawn_max_z = 1700
+            spawn_min_z = 700
+            spawn_max_z = 1800
 
-            car_min_height_under_ball = 500
-            car_max_height_under_ball = 1000
-            car_x_radius = 800
-            car_y_min = -800
-            car_y_max = -800
-            car_dir_noise_radius = np.pi/8
+            car_min_height_under_ball = 100 # 500
+            car_max_height_under_ball = 800 # 1000
+            car_x_radius = 50 # 800
+            car_y_min = -50 # -800
+            car_y_max = 50 # -800
+            car_dir_noise_radius = 0*np.pi/16
 
-            ball_vel_xy_noise_radius = 100
-            ball_vel_z_min = 100
-            ball_vel_z_max = 950
+            ball_vel_xy_noise_radius = 400
+            ball_vel_z_min = 50
+            ball_vel_z_max = 650
 
-            car_vel_noise_radius = 130
-            car_speed_min = 50
-            car_speed_max = 850
+            car_vel_noise_radius = 0
+            car_speed_min = 300
+            car_speed_max = 400
 
 
             ball_x = random.uniform(spawn_min_x, spawn_max_x)
@@ -185,9 +221,9 @@ def build_rlgym_v2_env():
             objective = np.array(common_values.ORANGE_GOAL_BACK) - state.ball.position
             objective = objective / np.linalg.norm(objective)
             objective[2] = 0.0
-            ball_vel = ball_vel + objective * random.uniform(100, 800)
+            ball_vel = ball_vel + objective * random.uniform(100, 800)*0
 
-            state.ball.linear_velocity = ball_vel*0
+            state.ball.linear_velocity = ball_vel
             state.ball.angular_velocity = np.zeros(3, dtype=np.float32)
             
 
@@ -202,21 +238,21 @@ def build_rlgym_v2_env():
                 pos_z = max(400, min(pos_z, spawn_max_z))
 
 
-                pos_z = 17
                 car.physics.position = np.array([pos_x, pos_y, pos_z], dtype=np.float32)
 
                 to_ball = state.ball.position - car.physics.position + random.uniform(-car_vel_noise_radius, car_vel_noise_radius)
                 to_ball = to_ball / np.linalg.norm(to_ball)
                 car_vel = to_ball * random.uniform(car_speed_min, car_speed_max)
 
-                car.physics.linear_velocity = car_vel*0
+                car.physics.linear_velocity = car_vel
                 car.physics.angular_velocity = np.zeros(3, dtype=np.float32)
                 # Aim car toward the ball
-                to_ball = np.array([0, 0, 0]) # state.ball.position - car.physics.position 
+                to_ball = state.ball.position - car.physics.position 
                 car.physics.euler_angles = dir_to_euler_yzx(to_ball) + random.uniform(-car_dir_noise_radius, car_dir_noise_radius)
                 car.boost_amount = 100.0
-                car.air_time_since_jump = 999.0 # start with no flip
+                car.air_time_since_jump = 2.0 # start with no flip
                 car.has_jumped = True
+            
 
     state_mutator = MutatorSequence(
         FixedTeamSizeMutator(blue_size=blue_team_size, orange_size=orange_team_size),
