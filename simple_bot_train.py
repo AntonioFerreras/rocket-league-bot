@@ -173,7 +173,6 @@ def build_rlgym_v2_env(debug=False):
         def build_obs(self, agents: List[AgentID], state: GameState, shared_info: Dict[str, Any]) -> Dict[AgentID, np.ndarray]:
             self._state = state
 
-            shared_info["current_target_index"] = 0
             obs = {}
             for agent in agents:
                 obs[agent] = self._build_obs(agent, state, shared_info)
@@ -283,7 +282,7 @@ if __name__ == "__main__":
     DefaultObsSpaceType = Tuple[str, int]
     DefaultActionSpaceType = Tuple[str, int]
 
-    train_dtype = torch.bfloat16
+    train_dtype = torch.float32
 
     def actor_factory(
         obs_space: DefaultObsSpaceType,
@@ -342,6 +341,9 @@ if __name__ == "__main__":
         agent_controllers_config={
             "PPO1": PPOAgentControllerConfigModel(
                 checkpoint_load_folder=args.resume_ckpt,
+                add_unix_timestamp=False,
+                save_every_ts=10_000_000,
+                n_checkpoints_to_keep=10,
                 timesteps_per_iteration=370_000,
                 learner_config=PPOLearnerConfigModel(
                     batch_size=200_000,

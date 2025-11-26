@@ -282,7 +282,7 @@ class BallToTargetReward(RewardFunction[AgentID, GameState, float]):
             hit_target_reward = 1.0
         else:
             if self.print_hits:
-                print(f"Not hit")
+                print(f"Not hit target {shared_info['current_target_index']}")
             hit_target_reward = 0.0
         return hit_target_reward + dot_product*5.0
 

@@ -83,20 +83,20 @@
         "batched_tensor_action_associated_learning_data": true
     },
     "process_config": {
-        "n_proc": 128,
-        "min_process_steps_per_inference": 57,
-        "render": false,
-        "render_delay": 0.0,
+        "n_proc": 1,
+        "min_process_steps_per_inference": 1,
+        "render": true,
+        "render_delay": 0.06666666666666667,
         "instance_launch_delay": null,
         "recalculate_agent_id_every_step": false
     },
     "agent_controllers_config": {
         "PPO1": {
             "timesteps_per_iteration": 370000,
-            "save_every_ts": 1000000,
-            "add_unix_timestamp": true,
-            "checkpoint_load_folder": "/home/antoniof/rocket-league-bot/agent_controllers_checkpoints/PPO1/try-path-airdribble/1764120018926722318",
-            "n_checkpoints_to_keep": 5,
+            "save_every_ts": 10000000,
+            "add_unix_timestamp": false,
+            "checkpoint_load_folder": "/home/antoniof/rocket-league-bot/agent_controllers_checkpoints/PPO1/try-path-airdribble-float32/1764172663544740318",
+            "n_checkpoints_to_keep": 10,
             "random_seed": 123,
             "save_mid_iteration_data_in_checkpoint": true,
             "learner_config": {
@@ -128,7 +128,7 @@
                 "enable": true,
                 "project": "rlgym-learn",
                 "group": "rlgym-learn-testing",
-                "run": "air-dribble-test10",
+                "run": "air-dribble-test10-fp32",
                 "id": null,
                 "new_run_with_timestamp_suffix": false,
                 "additional_wandb_run_config": {},

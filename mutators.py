@@ -219,6 +219,5 @@ class AirDribbleDirectedMutator(AirDribbleMutator):
             car.has_jumped = True
 
         # Update target info for observation (if needed, though we have path_points now)
-        shared_info["target_x"] = end_point[0]
-        shared_info["target_y"] = end_point[1]
-        shared_info["target_z"] = end_point[2]
+        shared_info["current_target_index"] = 0
+
