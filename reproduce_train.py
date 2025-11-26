@@ -10,8 +10,6 @@ pad_team_size = 2
 blue_team_size = team_size
 orange_team_size = team_size if spawn_opponents else 0
 action_repeat = 8
-no_touch_timeout_seconds = 5
-ball_hit_ground_timeout_seconds = 2
 game_timeout_seconds = 100
 render_speed = 1.0
 
@@ -20,7 +18,7 @@ render_speed = 1.0
 
 
 
-def build_rlgym_v2_env(debug=False):
+def build_rlgym_v2_env():
     import random
     from typing import Dict, Any, List, Tuple
     import numpy as np
@@ -37,6 +35,7 @@ def build_rlgym_v2_env(debug=False):
     from rlgym.rocket_league.obs_builders import DefaultObs
     from rlgym.rocket_league.reward_functions import (
         CombinedReward,
+        GoalReward,
     )
     from rlgym.rocket_league.sim import RocketSimEngine
     from rlgym.rocket_league.state_mutators import (
@@ -46,134 +45,28 @@ def build_rlgym_v2_env(debug=False):
     )
     from rlgym.rocket_league.rlviser import RLViserRenderer
 
-    from math_utils import dir_to_euler_yzx
-    from rewards import (
-        GoalReward,
-        DistancePlayerToBallReward,
-        BallToGoalReward,
-        DistancePlayerToGround,
-        VelocityPlayerToBallReward,
-        TouchReward,
-        ForwardBiasReward,
-        ZoneReward,
-        BallZoneReward,
-        BoostChangeReward,
-        BallToTargetReward,
-    )
-    from mutators import AirDribbleMutator, AirDribbleDirectedMutator
 
     
 
-    class NoTouchTimeoutCondition(DoneCondition[AgentID, GameState]):
-        """
-        A DoneCondition that is satisfied when no car has touched the ball for a specified amount of time.
-        Timer starts when the ball is touched for the first time.
-        """
-
-        def __init__(self, timeout_seconds: float, freeze_start_tick: bool = False):
-            """
-            :param timeout_seconds: Timeout in seconds
-            """
-            self.timeout_seconds = timeout_seconds
-            self.last_touch_tick = None
-            self.freeze_start_tick = freeze_start_tick
-
-        def reset(self, agents: List[AgentID], initial_state: GameState, shared_info: Dict[str, Any]) -> None:
-            if self.freeze_start_tick:
-                self.last_touch_tick = None
-            else:
-                self.last_touch_tick = initial_state.tick_count
-
-        def is_done(self, agents: List[AgentID], state: GameState, shared_info: Dict[str, Any]) -> Dict[AgentID, bool]:
-            if any(car.ball_touches > 0 for car in state.cars.values()):
-                self.last_touch_tick = state.tick_count
-                done = False
-            else:
-                if self.last_touch_tick is None:
-                    return {agent: False for agent in agents}
-                time_elapsed = (state.tick_count - self.last_touch_tick) / common_values.TICKS_PER_SECOND
-                done = time_elapsed >= self.timeout_seconds
-
-            return {agent: done for agent in agents}
-
-    class BallHitGroundTimeoutCondition(DoneCondition[AgentID, GameState]):
-        """
-        A DoneCondition that is satisfied a few seconds after the ball hits the ground.
-        """
-
-        def __init__(self, timeout_seconds: float):
-            """
-            :param timeout_seconds: Timeout in seconds
-            """
-            self.timeout_seconds = timeout_seconds
-            self.last_hit_ground_tick = None
-
-        def reset(self, agents: List[AgentID], initial_state: GameState, shared_info: Dict[str, Any]) -> None:
-            self.last_hit_ground_tick = None
-
-        def is_done(self, agents: List[AgentID], state: GameState, shared_info: Dict[str, Any]) -> Dict[AgentID, bool]:
-            if state.ball.position[2] < BALL_RESTING_HEIGHT*1.5:
-                self.last_hit_ground_tick = state.tick_count
-                done = False
-            else:
-                if self.last_hit_ground_tick is None:
-                    return {agent: False for agent in agents}
-                time_elapsed = (state.tick_count - self.last_hit_ground_tick) / common_values.TICKS_PER_SECOND
-                done = time_elapsed >= self.timeout_seconds
-
-            return {agent: done for agent in agents}
 
     action_parser = RepeatAction(LookupTableAction(), repeats=action_repeat)
     termination_condition = GoalCondition()
     truncation_condition = AnyCondition(
-        NoTouchTimeoutCondition(timeout_seconds=no_touch_timeout_seconds, freeze_start_tick=False),
         TimeoutCondition(timeout_seconds=game_timeout_seconds), 
-        BallHitGroundTimeoutCondition(timeout_seconds=ball_hit_ground_timeout_seconds),
     )
 
-    goal_reward_weight = 6.0
-    touch_reward_weight = 2.0
-    distance_player_to_ball_reward_weight = 1.5 *0.3
-    velocity_player_to_ball_reward_weight = 0.5 *0.3
-    ball_to_goal_reward_weight = 1.5 * 0
-    distance_player_to_ground_reward_weight = 1.5*0
-    forward_bias_reward_weight = 0.5*0
-    zone_reward_weight = 1.0
-    ball_zone_reward_weight = 2.0
-    boost_change_reward_weight = 0.5*0
-    ball_to_target_reward_weight = 10.0
-
+    
     reward_fn = CombinedReward(
-        (GoalReward(), goal_reward_weight),
-        (TouchReward(), touch_reward_weight),
-        (DistancePlayerToBallReward(), distance_player_to_ball_reward_weight),
-        (VelocityPlayerToBallReward(), velocity_player_to_ball_reward_weight),
-        (BallToGoalReward(), ball_to_goal_reward_weight),
-        (DistancePlayerToGround(), distance_player_to_ground_reward_weight),
-        (ForwardBiasReward(), forward_bias_reward_weight),
-        (ZoneReward(), zone_reward_weight),
-        (BoostChangeReward(), boost_change_reward_weight),
-        (BallZoneReward(), ball_zone_reward_weight),
-        (BallToTargetReward(print_hits=debug), ball_to_target_reward_weight),
+        (GoalReward(), 1.0),
     )
 
-    class FreestyleObs(DefaultObs):
+    class TestObs(DefaultObs):
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)
-            self.num_conditions = 16
 
-        def get_obs_space(self, agent: AgentID) -> Tuple[str, int]:
-            if self.zero_padding is not None:
-                return 'real', 52 + 20 * self.zero_padding * 2 + self.num_conditions
-            elif self._state is not None:
-                return 'real', 52 + 20 * len(self._state.cars) + self.num_conditions
-            else:
-                return 'real', -1 # Without zero padding this depends on the current state, but we don't have one yet
 
         def build_obs(self, agents: List[AgentID], state: GameState, shared_info: Dict[str, Any]) -> Dict[AgentID, np.ndarray]:
             self._state = state
-
-            shared_info["current_target_index"] = 0
             obs = {}
             for agent in agents:
                 obs[agent] = self._build_obs(agent, state, shared_info)
@@ -181,29 +74,12 @@ def build_rlgym_v2_env(debug=False):
 
             # track some stats
             # height of ball
-            shared_info["ball_x"] = state.ball.position[0]
-            shared_info["ball_y"] = state.ball.position[1]
-            shared_info["ball_z"] = state.ball.position[2]
+            shared_info["ball_height"] = state.ball.position[2]
 
-            
             return obs
 
-        def _build_obs(self, agent: AgentID, state: GameState, shared_info: Dict[str, Any]) -> np.ndarray:
-            obs = super()._build_obs(agent, state, shared_info)
-            # add conditions 
-            target_pos = shared_info["path_points"][shared_info["current_target_index"]]
-            num_targets = len(shared_info["path_points"])
-            if shared_info["current_target_index"] + 1 < num_targets:
-                next_target_pos = shared_info["path_points"][shared_info["current_target_index"] + 1]
-            else:
-                next_target_pos = target_pos
 
-            obs = np.concatenate([obs, target_pos*self.POS_COEF])
-            obs = np.concatenate([obs, next_target_pos*self.POS_COEF])
-            obs = np.concatenate([obs, np.zeros(self.num_conditions-6)])
-            return obs
-
-    obs_builder = FreestyleObs(
+    obs_builder = TestObs(
         zero_padding=pad_team_size,
         pos_coef=np.asarray(
             [
@@ -218,11 +94,11 @@ def build_rlgym_v2_env(debug=False):
         boost_coef=1 / 100.0,
     )
 
-    random.seed(123123)
-    
+
+
     state_mutator = MutatorSequence(
         FixedTeamSizeMutator(blue_size=blue_team_size, orange_size=orange_team_size),
-        AirDribbleDirectedMutator(),
+        KickoffMutator(),
     )
     return RLGym(
         state_mutator=state_mutator,
@@ -244,7 +120,7 @@ if __name__ == "__main__":
     parser.add_argument("--run_name", type=str, default="airdribble-bot")
     args = parser.parse_args()
     
-    from typing import Tuple
+    from typing import Tuple, Any, Dict, List
 
     import torch
     import numpy as np
@@ -253,6 +129,8 @@ if __name__ == "__main__":
         WandbMetricsLoggerConfigModel,
     )
     from rlgym_learn_algos.ppo import (
+        BasicCritic,
+        DiscreteFF,
         ExperienceBufferConfigModel,
         GAETrajectoryProcessor,
         GAETrajectoryProcessorConfigModel,
@@ -260,7 +138,7 @@ if __name__ == "__main__":
         PPOAgentController,
         PPOAgentControllerConfigModel,
         PPOLearnerConfigModel,
-        # PPOMetricsLogger,
+        PPOMetricsLogger,
     )
 
     from rlgym_learn import (
@@ -273,10 +151,7 @@ if __name__ == "__main__":
         SerdeTypesModel,
         generate_config,
     )
-    from rlgym_learn.rocket_league import GameStatePythonSerde
 
-    from models import BasicCritic, DiscreteFF
-    from metrics_logger import PPOMetricsLogger
 
     # The obs_space_type and action_space_type are determined by your choice of ObsBuilder and ActionParser respectively.
     # The logic used here assumes you are using the types defined by the DefaultObs and LookupTableAction above.
@@ -290,25 +165,10 @@ if __name__ == "__main__":
         action_space: DefaultActionSpaceType,
         device: str,
     ):
-        dim = 512
-        num_layers = 4
-        return DiscreteFF(
-            obs_space[1], 
-            action_space[1], 
-            (dim,) * num_layers, 
-            device, 
-            dtype=train_dtype
-        )
+        return DiscreteFF(obs_space[1], action_space[1], (256, 256, 256), device)
 
     def critic_factory(obs_space: DefaultObsSpaceType, device: str):
-        dim = 512
-        num_layers = 4
-        return BasicCritic(
-            obs_space[1], 
-            (dim,) * num_layers, 
-            device, 
-            dtype=train_dtype
-        )
+        return BasicCritic(obs_space[1], (256, 256, 256), device)
 
     # Create the config that will be used for the run
     config = LearningCoordinatorConfigModel(
@@ -324,13 +184,7 @@ if __name__ == "__main__":
                 action_space_serde_type=PyAnySerdeType.TUPLE(
                     (PyAnySerdeType.STRING(), PyAnySerdeType.INT())
                 ),
-                shared_info_serde_type=PyAnySerdeType.TYPEDDICT({
-                    "path_points": PyAnySerdeType.NUMPY(np.float32),
-                    "current_target_index": PyAnySerdeType.INT(),
-                    "ball_x": PyAnySerdeType.FLOAT(),
-                    "ball_y": PyAnySerdeType.FLOAT(),
-                    "ball_z": PyAnySerdeType.FLOAT(),
-                }),
+                shared_info_serde_type=PyAnySerdeType.TYPEDDICT({"ball_height": PyAnySerdeType.FLOAT()}),
             ),
             timestep_limit=60_000_000_000,  # Train for 60B steps
         ),
@@ -345,7 +199,7 @@ if __name__ == "__main__":
                 timesteps_per_iteration=370_000,
                 learner_config=PPOLearnerConfigModel(
                     batch_size=200_000,
-                    ent_coef=0.004,  # Sets the entropy coefficient used in the PPO algorithm
+                    ent_coef=0.01,  # Sets the entropy coefficient used in the PPO algorithm
                     actor_lr=4e-4,  # Sets the learning rate of the actor model
                     critic_lr=4e-4,  # Sets the learning rate of the critic model
                 ),
@@ -371,16 +225,29 @@ if __name__ == "__main__":
         force_overwrite=True,
     )
 
-    from functools import partial
-    
+    class TestMetricsLogger(PPOMetricsLogger):
+        def collect_env_metrics(self, data: List[Dict[str, Any]]):
+            # This is a workaround
+            # self.state_metrics = {
+            #     "Tracked metrics": {
+            #         "Average ball height": np.mean([shared_info["ball_height"] if shared_info is not None else 0.0 for shared_info in data])
+            #     }
+            # }
+            # This fails because at the start, shared_info is None
+            self.state_metrics = {
+                "Tracked metrics": {
+                    "Average ball height": np.mean([shared_info["ball_height"] for shared_info in data])
+                }
+            }
+
     learning_coordinator = LearningCoordinator(
-        partial(build_rlgym_v2_env, debug=args.render),
+        build_rlgym_v2_env,
         agent_controllers={
             "PPO1": PPOAgentController(
                 actor_factory=actor_factory,
                 critic_factory=critic_factory,
                 experience_buffer=NumpyExperienceBuffer(GAETrajectoryProcessor()),
-                metrics_logger=WandbMetricsLogger(PPOMetricsLogger()),
+                metrics_logger=WandbMetricsLogger(TestMetricsLogger()),
                 obs_standardizer=None,
             )
         },

@@ -11,6 +11,23 @@ from math_utils import normalize
 def height_sigmoid(height: float) -> float:
     return 0.5 * np.tanh((height - 900) / 250) + 0.5
 
+class GoalReward(RewardFunction[AgentID, GameState, float]):
+    """
+    A RewardFunction that gives a reward of 1 if the agent's team scored a goal, -1 if the opposing team scored a goal,
+    """
+
+    def reset(self, agents: List[AgentID], initial_state: GameState, shared_info: Dict[str, Any]) -> None:
+        pass
+
+    def get_rewards(self, agents: List[AgentID], state: GameState, is_terminated: Dict[AgentID, bool],
+                    is_truncated: Dict[AgentID, bool], shared_info: Dict[str, Any]) -> Dict[AgentID, float]:
+        return {agent: self._get_reward(agent, state) for agent in agents}
+
+    def _get_reward(self, agent: AgentID, state: GameState) -> float:
+        if state.cars[agent].physics.position[2] < 60.0:
+            return 0.0
+        return state.goal_scored
+            
 class DistancePlayerToGround(RewardFunction[AgentID, GameState, float]):
     def reset(self, agents: List[AgentID], initial_state: GameState, shared_info: Dict[str, Any]) -> None:
         pass
@@ -97,8 +114,8 @@ class DistancePlayerToBallReward(RewardFunction[AgentID, GameState, float]):
         # makes it so it needs to be within 600 uu to get any measurable reward.
         dist_reward = np.exp(-12.0 * dist / CAR_MAX_SPEED)  # Inspired by https://arxiv.org/abs/2105.12196
 
-        height_reward = height_sigmoid(state.cars[agent].physics.position[2])
-        return dist_reward * height_reward
+        # height_reward = height_sigmoid(state.cars[agent].physics.position[2])
+        return dist_reward #* height_reward
 
 
 
@@ -154,8 +171,8 @@ class VelocityPlayerToBallReward(RewardFunction[AgentID, GameState, float]):
         if self.include_negative_values:
             return norm_vel
         vel_reward = max(0, norm_vel)
-        height_reward = height_sigmoid(state.cars[agent].physics.position[2])
-        return vel_reward * height_reward
+        #height_reward = height_sigmoid(state.cars[agent].physics.position[2])
+        return vel_reward #* height_reward
 
 def trajectory_comparison(pos1, vel1, pos2, vel2, check_bounds=True):
     """
@@ -235,6 +252,40 @@ class BallToGoalReward(RewardFunction[AgentID, GameState, float]):
 
         return dist_reward + vel_reward
 
+class BallToTargetReward(RewardFunction[AgentID, GameState, float]):
+    """
+    A RewardFunction that gives a reward when the ball comes within a certain distance of the target.
+    Also a reward for travelling towards the target.
+    Once within the distance, increment the current target index.
+    """
+    def __init__(self, target_distance=500, print_hits=False):
+        super().__init__()
+        self.target_distance = target_distance
+        self.print_hits = print_hits
+
+    def reset(self, agents: List[AgentID], initial_state: GameState, shared_info: Dict[str, Any]) -> None:
+        shared_info["current_target_index"] = 0
+
+    def get_rewards(self, agents: List[AgentID], state: GameState, is_terminated: Dict[AgentID, bool],
+                    is_truncated: Dict[AgentID, bool], shared_info: Dict[str, Any]) -> Dict[AgentID, float]:
+        return {agent: self._get_reward(agent, state, shared_info) for agent in agents}
+
+    def _get_reward(self, agent: AgentID, state: GameState, shared_info: Dict[str, Any]) -> float:
+        objective = shared_info["path_points"][shared_info["current_target_index"]]
+        dir_target = normalize(objective - state.ball.position)
+        dot_product = np.dot(dir_target, state.ball.linear_velocity/BALL_MAX_SPEED)
+        dist = np.linalg.norm(state.ball.position - objective)
+        if dist < self.target_distance:
+            if self.print_hits:
+                print(f"Hit target {shared_info['current_target_index']}")
+            shared_info["current_target_index"] = min(shared_info["current_target_index"] + 1, len(shared_info["path_points"]) - 1)
+            hit_target_reward = 1.0
+        else:
+            if self.print_hits:
+                print(f"Not hit")
+            hit_target_reward = 0.0
+        return hit_target_reward + dot_product*5.0
+
 
 class ForwardBiasReward(RewardFunction[AgentID, GameState, float]):
     """
@@ -297,17 +348,18 @@ class BallZoneReward(RewardFunction[AgentID, GameState, float]):
         self, agent: AgentID, state: GameState
     ) -> float:
         thresh_ceiling = 110.0
-        thresh_floor = 300.0
-        thresh_wall = 200.0
+        thresh_floor = 150.0
+        thresh_wall = 150.0
+        height_reward_weight = 0.0
         close_to_wall = np.abs(state.ball.position[0]) > SIDE_WALL_X - thresh_wall
         close_to_wall = close_to_wall or np.abs(state.ball.position[1]) > BACK_WALL_Y - thresh_wall
         close_to_wall = close_to_wall or state.ball.position[2] > CEILING_Z - thresh_ceiling
         close_to_wall = close_to_wall or state.ball.position[2] < thresh_floor
         if close_to_wall:
-            return -2.5*0
+            return -1.5
         height = state.ball.position[2]
         height_reward = height_sigmoid(height)
-        return height_reward
+        return height_reward*height_reward_weight
 
 class TouchReward(RewardFunction[AgentID, GameState, float]):
     """
@@ -341,8 +393,7 @@ class TouchReward(RewardFunction[AgentID, GameState, float]):
 
         # measure how much upward velocity direction it gave the ball
         acceleration = (state.ball.linear_velocity - self.prev_ball.linear_velocity) / BALL_MAX_SPEED
-        accel_dir_z = normalize(acceleration)[2]
-
+        accel_dir_z = acceleration[2]
 
         self.prev_ball = state.ball
-        return hit_ball * vertical + self.acceleration_reward * accel_dir_z
+        return hit_ball * vertical + self.acceleration_reward * accel_dir_z * 10.0

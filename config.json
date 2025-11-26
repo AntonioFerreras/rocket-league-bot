@@ -47,7 +47,32 @@
                     }
                 ]
             },
-            "shared_info_serde_type": null,
+            "shared_info_serde_type": {
+                "type": "typeddict",
+                "key_serde_type_dict": {
+                    "ball_x": {
+                        "type": "float"
+                    },
+                    "ball_y": {
+                        "type": "float"
+                    },
+                    "ball_z": {
+                        "type": "float"
+                    },
+                    "current_target_index": {
+                        "type": "int"
+                    },
+                    "path_points": {
+                        "type": "numpy",
+                        "dtype": "float32",
+                        "config": {
+                            "type": "dynamic",
+                            "preprocessor_fn_pkl": null,
+                            "postprocessor_fn_pkl": null
+                        }
+                    }
+                }
+            },
             "shared_info_setter_serde_type": null,
             "state_serde_type": null
         },
@@ -58,10 +83,10 @@
         "batched_tensor_action_associated_learning_data": true
     },
     "process_config": {
-        "n_proc": 1,
-        "min_process_steps_per_inference": 1,
-        "render": true,
-        "render_delay": 0.022222222222222223,
+        "n_proc": 128,
+        "min_process_steps_per_inference": 57,
+        "render": false,
+        "render_delay": 0.0,
         "instance_launch_delay": null,
         "recalculate_agent_id_every_step": false
     },
@@ -70,7 +95,7 @@
             "timesteps_per_iteration": 370000,
             "save_every_ts": 1000000,
             "add_unix_timestamp": true,
-            "checkpoint_load_folder": "/home/antoniof/rocket-league-bot/agent_controllers_checkpoints/PPO1/win-hover-under-ball-copy/1763050725454065651",
+            "checkpoint_load_folder": "/home/antoniof/rocket-league-bot/agent_controllers_checkpoints/PPO1/try-path-airdribble/1764120018926722318",
             "n_checkpoints_to_keep": 5,
             "random_seed": 123,
             "save_mid_iteration_data_in_checkpoint": true,
@@ -79,7 +104,7 @@
                 "n_epochs": 1,
                 "batch_size": 200000,
                 "n_minibatches": 1,
-                "ent_coef": 0.01,
+                "ent_coef": 0.004,
                 "clip_range": 0.2,
                 "actor_lr": 0.0004,
                 "critic_lr": 0.0004,
@@ -103,7 +128,7 @@
                 "enable": true,
                 "project": "rlgym-learn",
                 "group": "rlgym-learn-testing",
-                "run": "air-dribble-test6",
+                "run": "air-dribble-test10",
                 "id": null,
                 "new_run_with_timestamp_suffix": false,
                 "additional_wandb_run_config": {},
