@@ -159,6 +159,9 @@ class AirDribbleDirectedMutator(AirDribbleMutator):
         
         # Store path points in shared_info
         shared_info["path_points"] = path_points.astype(np.float32)
+        shared_info["path_start"] = start_point.astype(np.float32)
+        shared_info["path_end"] = end_point.astype(np.float32)
+        shared_info["path_control"] = control_point.astype(np.float32)
         
         # Re-position cars based on the new ball position (Start Point)
         # This reuses the logic from AirDribbleMutator but applies it to the new ball location

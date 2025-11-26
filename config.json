@@ -62,7 +62,34 @@
                     "current_target_index": {
                         "type": "int"
                     },
+                    "path_control": {
+                        "type": "numpy",
+                        "dtype": "float32",
+                        "config": {
+                            "type": "dynamic",
+                            "preprocessor_fn_pkl": null,
+                            "postprocessor_fn_pkl": null
+                        }
+                    },
+                    "path_end": {
+                        "type": "numpy",
+                        "dtype": "float32",
+                        "config": {
+                            "type": "dynamic",
+                            "preprocessor_fn_pkl": null,
+                            "postprocessor_fn_pkl": null
+                        }
+                    },
                     "path_points": {
+                        "type": "numpy",
+                        "dtype": "float32",
+                        "config": {
+                            "type": "dynamic",
+                            "preprocessor_fn_pkl": null,
+                            "postprocessor_fn_pkl": null
+                        }
+                    },
+                    "path_start": {
                         "type": "numpy",
                         "dtype": "float32",
                         "config": {

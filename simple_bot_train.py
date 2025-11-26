@@ -45,6 +45,40 @@ def build_rlgym_v2_env(debug=False):
         MutatorSequence,
     )
     from rlgym.rocket_league.rlviser import RLViserRenderer
+    from path_generator_viz import PathVisualizer
+
+    class CompositeRenderer:
+        def __init__(self):
+            self.rlviser = RLViserRenderer()
+            self.path_viz = PathVisualizer(blocking=False)
+            self.last_path_points = None
+        
+        def render(self, state, shared_info):
+            self.rlviser.render(state, shared_info)
+            
+            # Check if path has changed or needs update
+            if "path_points" in shared_info:
+                 path_points = shared_info["path_points"]
+                 # Simple check: if length or first point changed
+                 should_update = False
+                 if self.last_path_points is None:
+                     should_update = True
+                 elif len(path_points) != len(self.last_path_points):
+                     should_update = True
+                 elif not np.allclose(path_points, self.last_path_points):
+                     should_update = True
+                 
+                 if should_update:
+                     self.last_path_points = path_points.copy()
+                     start = shared_info.get("path_start", np.zeros(3))
+                     end = shared_info.get("path_end", np.zeros(3))
+                     control = shared_info.get("path_control", np.zeros(3))
+                     self.path_viz.show_path(path_points, start, end, control)
+            
+            self.path_viz.update_ball(state.ball.position)
+            self.path_viz.process_events()
+            # Also handle window close? 
+            # self.path_viz.root.protocol("WM_DELETE_WINDOW", ...)
 
     from math_utils import dir_to_euler_yzx
     from rewards import (
@@ -231,7 +265,7 @@ def build_rlgym_v2_env(debug=False):
         termination_cond=termination_condition,
         truncation_cond=truncation_condition,
         transition_engine=RocketSimEngine(),
-        renderer=RLViserRenderer(),
+        renderer=CompositeRenderer(),
     )
 
 
@@ -325,6 +359,9 @@ if __name__ == "__main__":
                 ),
                 shared_info_serde_type=PyAnySerdeType.TYPEDDICT({
                     "path_points": PyAnySerdeType.NUMPY(np.float32),
+                    "path_start": PyAnySerdeType.NUMPY(np.float32),
+                    "path_end": PyAnySerdeType.NUMPY(np.float32),
+                    "path_control": PyAnySerdeType.NUMPY(np.float32),
                     "current_target_index": PyAnySerdeType.INT(),
                     "ball_x": PyAnySerdeType.FLOAT(),
                     "ball_y": PyAnySerdeType.FLOAT(),
@@ -382,7 +419,7 @@ if __name__ == "__main__":
                 actor_factory=actor_factory,
                 critic_factory=critic_factory,
                 experience_buffer=NumpyExperienceBuffer(GAETrajectoryProcessor()),
-                metrics_logger=WandbMetricsLogger(PPOMetricsLogger()),
+                metrics_logger=WandbMetricsLogger(PPOMetricsLogger()) if not args.render else None,
                 obs_standardizer=None,
             )
         },

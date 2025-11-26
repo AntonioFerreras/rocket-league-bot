@@ -260,7 +260,7 @@ def generate_random_path(step_distance=1000):
     return path_points, start_point, end_point, raw_control_point
 
 class PathVisualizer:
-    def __init__(self):
+    def __init__(self, blocking=True):
         self.root = tk.Tk()
         self.root.title("Rocket League Path Generator (Tkinter)")
         
@@ -287,8 +287,62 @@ class PathVisualizer:
         self.entry_step_dist = tk.Entry(control_frame, textvariable=self.step_dist_var, width=5)
         self.entry_step_dist.pack(side=tk.LEFT)
         
-        self.update_path()
-        self.root.mainloop()
+        if blocking:
+            self.update_path()
+            self.root.mainloop()
+
+    def process_events(self):
+        self.root.update()
+        self.root.update_idletasks()
+
+    def show_path(self, path, start, end, control):
+        self.canvas.delete("all")
+        
+        self.draw_field_top_down()
+        self.draw_field_side_view()
+        
+        # Draw Path Top-Down
+        td_points = [self.transform_top_down(p[0], p[1]) for p in path]
+        # Flatten list of tuples for create_line
+        td_coords = [coord for point in td_points for coord in point]
+        if len(td_coords) >= 4:
+            self.canvas.create_line(td_coords, fill="red", width=2, smooth=True)
+
+        # Draw points in yellow
+        for px, py in td_points:
+            self.canvas.create_oval(px-2, py-2, px+2, py+2, fill="yellow", outline="yellow")
+        
+        # Start/End/Control Top-Down
+        sx, sy = self.transform_top_down(start[0], start[1])
+        self.canvas.create_oval(sx-4, sy-4, sx+4, sy+4, fill="green")
+        
+        ex, ey = self.transform_top_down(end[0], end[1])
+        self.canvas.create_line(ex-5, ey-5, ex+5, ey+5, fill="red", width=2)
+        self.canvas.create_line(ex-5, ey+5, ex+5, ey-5, fill="red", width=2)
+        
+        cx, cy = self.transform_top_down(control[0], control[1])
+        self.canvas.create_oval(cx-2, cy-2, cx+2, cy+2, fill="gray")
+        
+        # Draw Path Side View
+        sv_points = [self.transform_side_view(p[1], p[2]) for p in path]
+        sv_coords = [coord for point in sv_points for coord in point]
+        if len(sv_coords) >= 4:
+            self.canvas.create_line(sv_coords, fill="red", width=2, smooth=True)
+
+        # Draw points in yellow (Side View)
+        for px, py in sv_points:
+            self.canvas.create_oval(px-2, py-2, px+2, py+2, fill="yellow", outline="yellow")
+        
+        # Start/End/Control Side View
+        sx, sy = self.transform_side_view(start[1], start[2])
+        self.canvas.create_oval(sx-4, sy-4, sx+4, sy+4, fill="green")
+        
+        ex, ey = self.transform_side_view(end[1], end[2])
+        self.canvas.create_line(ex-5, ey-5, ex+5, ey+5, fill="red", width=2)
+        self.canvas.create_line(ex-5, ey+5, ex+5, ey-5, fill="red", width=2)
+        
+        cx, cy = self.transform_side_view(control[1], control[2])
+        self.canvas.create_oval(cx-2, cy-2, cx+2, cy+2, fill="gray")
 
     def transform_top_down(self, x, y):
         # Map Field X/Y to Screen X/Y
@@ -451,6 +505,26 @@ class PathVisualizer:
         
         cx, cy = self.transform_side_view(control[1], control[2])
         self.canvas.create_oval(cx-2, cy-2, cx+2, cy+2, fill="gray")
+
+    def update_ball(self, position):
+        x, y, z = position
+        
+        # Top Down
+        screen_x, screen_y = self.transform_top_down(x, y)
+        r = 6 # Radius
+        if self.canvas.find_withtag("ball_top_down"):
+            self.canvas.coords("ball_top_down", screen_x-r, screen_y-r, screen_x+r, screen_y+r)
+            self.canvas.tag_raise("ball_top_down")
+        else:
+            self.canvas.create_oval(screen_x-r, screen_y-r, screen_x+r, screen_y+r, fill="purple", outline="black", tags="ball_top_down")
+
+        # Side View
+        screen_x_side, screen_y_side = self.transform_side_view(y, z)
+        if self.canvas.find_withtag("ball_side_view"):
+            self.canvas.coords("ball_side_view", screen_x_side-r, screen_y_side-r, screen_x_side+r, screen_y_side+r)
+            self.canvas.tag_raise("ball_side_view")
+        else:
+             self.canvas.create_oval(screen_x_side-r, screen_y_side-r, screen_x_side+r, screen_y_side+r, fill="purple", outline="black", tags="ball_side_view")
 
 if __name__ == "__main__":
     viz = PathVisualizer()
