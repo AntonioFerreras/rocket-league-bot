@@ -122,6 +122,10 @@ class AirDribbleDirectedMutator(AirDribbleMutator):
     An AirDribbleMutator that generates a directed path for the ball.
     """
 
+    def __init__(self, num_conditions: int):
+        super().__init__()
+        self.num_conditions = num_conditions
+
     def apply(self, state: GameState, shared_info: Dict[str, Any]) -> None:
         from path_generator import generate_random_path
         
@@ -129,8 +133,14 @@ class AirDribbleDirectedMutator(AirDribbleMutator):
         super().apply(state, shared_info)
         
         # Generate a path
-        path_points, start_point, end_point, control_point = generate_random_path(step_distance=1000)
+        path_points, start_point, end_point, control_point, glue_conditions = generate_random_path(step_distance=1000)
 
+        num_path_points = len(path_points)
+        condition_data = np.zeros((num_path_points, self.num_conditions), dtype=np.float32)
+
+        # Set 7th flag (index 6) based on generated glue conditions
+        if num_path_points > 0:
+            condition_data[:, 6] = glue_conditions
         
         
         # Override Ball Position to be the Start Point
@@ -162,6 +172,10 @@ class AirDribbleDirectedMutator(AirDribbleMutator):
         shared_info["path_start"] = start_point.astype(np.float32)
         shared_info["path_end"] = end_point.astype(np.float32)
         shared_info["path_control"] = control_point.astype(np.float32)
+
+        shared_info["air_roll_rate"] = 0.0
+        shared_info["air_roll_action"] = 0
+        shared_info["condition_data"] = condition_data
         
         # Re-position cars based on the new ball position (Start Point)
         # This reuses the logic from AirDribbleMutator but applies it to the new ball location

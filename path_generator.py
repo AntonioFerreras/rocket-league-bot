@@ -13,8 +13,8 @@ GOAL_CENTER_TO_POST = 892.755
 CORNER_CATHETUS_LENGTH = 1152
 
 # Margins
-FLOOR_MARGIN = 600
-CEILING_MARGIN = 450
+FLOOR_MARGIN = 350
+CEILING_MARGIN = 350
 WALL_MARGIN = 100
 
 # Derived constants
@@ -95,16 +95,19 @@ def get_random_point_in_field():
 def get_random_point_in_goal():
     # Pick a side randomly
     is_orange = random.choice([True, False])
-    y = GOAL_Y_ORANGE if is_orange else GOAL_Y_BLUE
+    # Place it deep in the goal (halfway between goal line and back net)
+    goal_depth = BACK_NET_Y - BACK_WALL_Y
+    y_offset = goal_depth / 2
+    y = (GOAL_Y_ORANGE + y_offset) if is_orange else (GOAL_Y_BLUE - y_offset)
     
     # Random X within goal width (with margin)
     x_limit = GOAL_CENTER_TO_POST - WALL_MARGIN
     x = random.uniform(-x_limit, x_limit)
     
     # Random Z within goal height (with margin)
-    # Z must be > FLOOR_MARGIN and < GOAL_HEIGHT - WALL_MARGIN (top post)
-    z_min = FLOOR_MARGIN
-    z_max = GOAL_HEIGHT - WALL_MARGIN
+    # Z must be > 200 and < GOAL_HEIGHT - WALL_MARGIN (top post)
+    z_min = 200
+    z_max = GOAL_HEIGHT + 200 # - WALL_MARGIN
     z = random.uniform(z_min, z_max)
     
     return np.array([x, y, z])
@@ -216,7 +219,7 @@ def generate_random_path(step_distance=1000):
     # Allow curve to go higher (1.5x more likely to reach near ceiling)
     # We expand the range we pick from, then clamp it
     # Base safe max Z
-    safe_max_z = CEILING_Z - CEILING_MARGIN
+    safe_max_z = CEILING_Z + 200
     z_sample = random.uniform(FLOOR_MARGIN, safe_max_z * 1.5)
     cp_z = min(z_sample, safe_max_z) 
     
@@ -239,8 +242,8 @@ def generate_random_path(step_distance=1000):
     max_dist = 10240.0
     
     # Strength factors
-    min_strength = 0.25 # Quarter as much
-    max_strength = 1.0  # 1x much
+    min_strength = 0.38
+    max_strength = 1.5 
     
     # Linear interpolation of strength based on length
     if path_length <= min_dist:
@@ -256,7 +259,19 @@ def generate_random_path(step_distance=1000):
     
     # Sample roughly evenly spaced points
     path_points = sample_points_on_path(start_point, control_point, end_point, step_distance)
+
+    # Generate Gorilla Glue conditions (Index 6)
+    num_path_points = len(path_points)
+    glue_conditions = np.zeros(num_path_points, dtype=np.float32)
     
-    return path_points, start_point, end_point, raw_control_point
+    if num_path_points > 0:
+        split_point = random.randint(0, num_path_points)
+        first_val = random.choice([0.0, 1.0])
+        second_val = 1.0 - first_val
+        
+        glue_conditions[:split_point] = first_val
+        glue_conditions[split_point:] = second_val
+    
+    return path_points, start_point, end_point, raw_control_point, glue_conditions
 
 

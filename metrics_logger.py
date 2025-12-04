@@ -44,6 +44,7 @@ class PPOMetricsLogger(
             # Fallback: if we have target_x/y/z explicitly set
 
         avg_target_dist = np.mean(target_dists) if target_dists else 0.0
+        avg_air_roll_rate = np.mean([shared_info.get("air_roll_rate", 0.0) if shared_info is not None else 0.0 for shared_info in data])
 
         avg_num_targets_hit = np.mean([shared_info.get("current_target_index", 0) if shared_info is not None else 0.0 for shared_info in data])
         max_num_targets_hit = np.max([shared_info.get("current_target_index", 0) if shared_info is not None else 0.0 for shared_info in data])
@@ -54,6 +55,7 @@ class PPOMetricsLogger(
                 "Average distance to target": avg_target_dist,
                 "Average number of targets hit": avg_num_targets_hit,
                 "Max number of targets hit": max_num_targets_hit,
+                "Average air roll rate": avg_air_roll_rate,
             }
         }
 

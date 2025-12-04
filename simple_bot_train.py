@@ -4,6 +4,7 @@ import os
 # needed to prevent numpy from using a ton of memory in env processes and causing them to throttle each other
 os.environ["OPENBLAS_NUM_THREADS"] = "1"
 
+num_conditions = 16
 spawn_opponents = False
 team_size = 1
 pad_team_size = 2
@@ -73,7 +74,12 @@ def build_rlgym_v2_env(debug=False):
                      start = shared_info.get("path_start", np.zeros(3))
                      end = shared_info.get("path_end", np.zeros(3))
                      control = shared_info.get("path_control", np.zeros(3))
-                     self.path_viz.show_path(path_points, start, end, control)
+                    
+                     condition_data = shared_info.get("condition_data", None)
+                     self.path_viz.show_path(path_points, start, end, control, condition_data)
+
+            if "current_target_index" in shared_info:
+                self.path_viz.update_controls(shared_info["current_target_index"])
             
             self.path_viz.update_ball(state.ball.position)
             self.path_viz.process_events()
@@ -93,6 +99,7 @@ def build_rlgym_v2_env(debug=False):
         BallZoneReward,
         BoostChangeReward,
         BallToTargetReward,
+        AirRollReward,
     )
     from mutators import AirDribbleMutator, AirDribbleDirectedMutator
 
@@ -157,7 +164,45 @@ def build_rlgym_v2_env(debug=False):
 
             return {agent: done for agent in agents}
 
-    action_parser = RepeatAction(LookupTableAction(), repeats=action_repeat)
+    from rlgym.api import ActionParser, ActionType, StateType, ActionSpaceType, AgentID
+    class CustomActionParser(ActionParser[AgentID, ActionType, np.ndarray, StateType, ActionSpaceType]):
+        """
+        A simple wrapper to emulate tick skip.
+
+        Repeats every action for a specified number of ticks.
+        """
+
+        def __init__(self,
+                    parser: ActionParser[AgentID, ActionType, np.ndarray, StateType, ActionSpaceType],
+                    repeats=8):
+            super().__init__()
+            self.parser = parser
+            self.repeats = repeats
+
+        def get_action_space(self, agent: AgentID) -> ActionSpaceType:
+            return self.parser.get_action_space(agent)
+
+        def reset(self, agents: List[AgentID], initial_state: StateType, shared_info: Dict[str, Any]) -> None:
+            self.parser.reset(agents, initial_state, shared_info)
+
+        def parse_actions(self, actions: Dict[AgentID, ActionType], state: StateType, shared_info: Dict[str, Any]) -> Dict[AgentID, np.ndarray]:
+            rlgym_actions = self.parser.parse_actions(actions, state, shared_info)
+            repeat_actions = {}
+            for agent, action in rlgym_actions.items():
+
+                shared_info["air_roll_action"] = action.flatten()[4]
+
+                if action.shape == (8,):
+                    action = np.expand_dims(action, axis=0)
+                elif action.shape != (1, 8):
+                    raise ValueError(f"Expected action to have shape (8,) or (1,8), got {action.shape}")
+                
+                
+                repeat_actions[agent] = action.repeat(self.repeats, axis=0)
+
+            return repeat_actions
+
+    action_parser = CustomActionParser(LookupTableAction(), repeats=action_repeat)
     termination_condition = GoalCondition()
     truncation_condition = AnyCondition(
         NoTouchTimeoutCondition(timeout_seconds=no_touch_timeout_seconds, freeze_start_tick=False),
@@ -165,17 +210,18 @@ def build_rlgym_v2_env(debug=False):
         BallHitGroundTimeoutCondition(timeout_seconds=ball_hit_ground_timeout_seconds),
     )
 
-    goal_reward_weight = 6.0
+    goal_reward_weight = 16.0
     touch_reward_weight = 2.0
-    distance_player_to_ball_reward_weight = 1.5 *0.3
-    velocity_player_to_ball_reward_weight = 0.5 *0.3
+    distance_player_to_ball_reward_weight = 1.5 *0.3 *0.0
+    velocity_player_to_ball_reward_weight = 0.5 *0.3 * 0.0
     ball_to_goal_reward_weight = 1.5 * 0
     distance_player_to_ground_reward_weight = 1.5*0
     forward_bias_reward_weight = 0.5*0
     zone_reward_weight = 1.0
-    ball_zone_reward_weight = 2.0
+    ball_zone_reward_weight = 4.0
     boost_change_reward_weight = 0.5*0
     ball_to_target_reward_weight = 10.0
+    air_roll_reward_weight = 5.0
 
     reward_fn = CombinedReward(
         (GoalReward(), goal_reward_weight),
@@ -189,12 +235,13 @@ def build_rlgym_v2_env(debug=False):
         (BoostChangeReward(), boost_change_reward_weight),
         (BallZoneReward(), ball_zone_reward_weight),
         (BallToTargetReward(print_hits=debug), ball_to_target_reward_weight),
+        (AirRollReward(), air_roll_reward_weight),
     )
 
     class FreestyleObs(DefaultObs):
-        def __init__(self, *args, **kwargs):
+        def __init__(self, num_conditions: int, *args, **kwargs):
             super().__init__(*args, **kwargs)
-            self.num_conditions = 16
+            self.num_conditions = num_conditions
 
         def get_obs_space(self, agent: AgentID) -> Tuple[str, int]:
             if self.zero_padding is not None:
@@ -219,6 +266,8 @@ def build_rlgym_v2_env(debug=False):
             shared_info["ball_z"] = state.ball.position[2]
 
             
+
+            
             return obs
 
         def _build_obs(self, agent: AgentID, state: GameState, shared_info: Dict[str, Any]) -> np.ndarray:
@@ -233,10 +282,13 @@ def build_rlgym_v2_env(debug=False):
 
             obs = np.concatenate([obs, target_pos*self.POS_COEF])
             obs = np.concatenate([obs, next_target_pos*self.POS_COEF])
-            obs = np.concatenate([obs, np.zeros(self.num_conditions-6)])
+            
+            current_conditions = shared_info["condition_data"][shared_info["current_target_index"]]
+            obs = np.concatenate([obs, current_conditions[6:]])
             return obs
 
     obs_builder = FreestyleObs(
+        num_conditions=num_conditions,
         zero_padding=pad_team_size,
         pos_coef=np.asarray(
             [
@@ -255,7 +307,7 @@ def build_rlgym_v2_env(debug=False):
     
     state_mutator = MutatorSequence(
         FixedTeamSizeMutator(blue_size=blue_team_size, orange_size=orange_team_size),
-        AirDribbleDirectedMutator(),
+        AirDribbleDirectedMutator(num_conditions=num_conditions),
     )
     return RLGym(
         state_mutator=state_mutator,
@@ -366,6 +418,9 @@ if __name__ == "__main__":
                     "ball_x": PyAnySerdeType.FLOAT(),
                     "ball_y": PyAnySerdeType.FLOAT(),
                     "ball_z": PyAnySerdeType.FLOAT(),
+                    "air_roll_rate": PyAnySerdeType.FLOAT(),
+                    "air_roll_action": PyAnySerdeType.INT(),
+                    "condition_data": PyAnySerdeType.NUMPY(np.float32),
                 }),
             ),
             timestep_limit=60_000_000_000,  # Train for 60B steps
@@ -384,7 +439,7 @@ if __name__ == "__main__":
                 timesteps_per_iteration=370_000,
                 learner_config=PPOLearnerConfigModel(
                     batch_size=200_000,
-                    ent_coef=0.004,  # Sets the entropy coefficient used in the PPO algorithm
+                    ent_coef=0.01,  # Sets the entropy coefficient used in the PPO algorithm
                     actor_lr=4e-4,  # Sets the learning rate of the actor model
                     critic_lr=4e-4,  # Sets the learning rate of the critic model
                 ),
