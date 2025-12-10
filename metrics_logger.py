@@ -49,6 +49,13 @@ class PPOMetricsLogger(
         avg_num_targets_hit = np.mean([shared_info.get("current_target_index", 0) if shared_info is not None else 0.0 for shared_info in data])
         max_num_targets_hit = np.max([shared_info.get("current_target_index", 0) if shared_info is not None else 0.0 for shared_info in data])
 
+        raw_hit_accel_dir_z = [shared_info.get("hit_accel_dir_z", -1.0) if shared_info is not None else -1.0 for shared_info in data]
+        filtered_hit_accel_dir_z = [x for x in raw_hit_accel_dir_z if x > -0.1]
+        avg_hit_accel_dir_z = np.mean(filtered_hit_accel_dir_z) if filtered_hit_accel_dir_z else -1.0
+        raw_num_ball_touches = [shared_info.get("num_ball_touches", 0) if shared_info is not None else 0.0 for shared_info in data]
+        filtered_num_ball_touches = [x for x in raw_num_ball_touches if x > 0]
+        avg_num_ball_touches = np.mean(filtered_num_ball_touches) if filtered_num_ball_touches else 0.0
+
         self.state_metrics = {
             "Tracked metrics": {
                 "Average ball height": np.mean([shared_info.get("ball_z", 0.0) if shared_info is not None else 0.0 for shared_info in data]),
@@ -56,6 +63,8 @@ class PPOMetricsLogger(
                 "Average number of targets hit": avg_num_targets_hit,
                 "Max number of targets hit": max_num_targets_hit,
                 "Average air roll rate": avg_air_roll_rate,
+                "Average hit acceleration direction z": avg_hit_accel_dir_z,
+                "Average number of ball touches": avg_num_ball_touches,
             }
         }
 

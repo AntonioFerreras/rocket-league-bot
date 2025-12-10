@@ -30,34 +30,7 @@ class GoalReward(RewardFunction[AgentID, GameState, float]):
             return 0.0
         return state.goal_scored
             
-class DistancePlayerToGround(RewardFunction[AgentID, GameState, float]):
-    def reset(self, agents: List[AgentID], initial_state: GameState, shared_info: Dict[str, Any]) -> None:
-        pass
 
-    def get_rewards(self, agents: List[AgentID], state: GameState, is_terminated: Dict[AgentID, bool],
-                    is_truncated: Dict[AgentID, bool], shared_info: Dict[str, Any]) -> Dict[AgentID, float]:
-        return {agent: self._get_reward(agent, state) for agent in agents}
-
-    def _get_reward(self, agent: AgentID, state: GameState) -> float:
-        # Compensate for inside of ball being unreachable (keep max reward at 1)
-        height = min(state.cars[agent].physics.position[2], 1700)
-        reward = 0.6 * np.tanh((height - 900) / 500) + 0.4
-        return reward
-
-class PlayerFallPunishment(RewardFunction[AgentID, GameState, float]):
-    def reset(self, agents: List[AgentID], initial_state: GameState, shared_info: Dict[str, Any]) -> None:
-        pass
-
-    def get_rewards(self, agents: List[AgentID], state: GameState, is_terminated: Dict[AgentID, bool],
-                    is_truncated: Dict[AgentID, bool], shared_info: Dict[str, Any]) -> Dict[AgentID, float]:
-        return {agent: self._get_reward(agent, state) for agent in agents}
-
-    def _get_reward(self, agent: AgentID, state: GameState) -> float:
-        # Compensate for inside of ball being unreachable (keep max reward at 1)
-        z_fall = state.cars[agent].physics.linear_velocity[2]
-        if z_fall > -50: z_fall = 0
-        punish = 5.0 * z_fall / CAR_MAX_SPEED
-        return punish
 
 class BoostChangeReward(RewardFunction[AgentID, GameState, float]):
     def __init__(self, gain_weight: float = 0.0, lose_weight=1.0,
@@ -104,17 +77,21 @@ class DistancePlayerToBallReward(RewardFunction[AgentID, GameState, float]):
 
     def get_rewards(self, agents: List[AgentID], state: GameState, is_terminated: Dict[AgentID, bool],
                     is_truncated: Dict[AgentID, bool], shared_info: Dict[str, Any]) -> Dict[AgentID, float]:
-        return {agent: self._get_reward(agent, state) for agent in agents}
+        return {agent: self._get_reward(agent, state, shared_info) for agent in agents}
 
-    def _get_reward(self, agent: AgentID, state: GameState) -> float:
+    def _get_reward(self, agent: AgentID, state: GameState, shared_info: Dict[str, Any]) -> float:
+        condition_data = shared_info["condition_data"][shared_info["current_target_index"]]
+
         if state.cars[agent].physics.position[2] < 200.0 or state.ball.position[2] < 200.0:
             return 0.0
 
         # Compensate for inside of ball being unreachable (keep max reward at 1)
-        dist = np.linalg.norm(state.cars[agent].physics.position - (state.ball.position + np.array([0, 0, -50]))) - BALL_RADIUS
-        # the typical decay for regular gameplay is 0.5, but we use 12.0 to make it really strict for air dribbling.
-        # makes it so it needs to be within 600 uu to get any measurable reward.
-        dist_reward = np.exp(-12.0 * dist / CAR_MAX_SPEED)  # Inspired by https://arxiv.org/abs/2105.12196
+
+        if condition_data[GORILLA_GLUE_INDEX] < 0.5:
+            return 0.0
+
+        dist = np.linalg.norm(state.cars[agent].physics.position - (state.ball.position)) - BALL_RADIUS
+        dist_reward = np.exp(-100.0 * dist / CAR_MAX_SPEED)  # Inspired by https://arxiv.org/abs/2105.12196
 
         # height_reward = height_sigmoid(state.cars[agent].physics.position[2])
         return dist_reward #* height_reward
@@ -287,8 +264,10 @@ class BallToTargetReward(RewardFunction[AgentID, GameState, float]):
                 print(f"Not hit target {shared_info['current_target_index']}")
             hit_target_reward = 0.0
         reward = hit_target_reward + dot_product*5.0
-        roll_rate = AirRollReward.get_air_roll_rate(state, agent)
-        reward *= abs(roll_rate)
+        condition_data = shared_info["condition_data"][shared_info["current_target_index"]]
+        if condition_data[GORILLA_GLUE_INDEX] < 0.5:
+            roll_rate = AirRollReward.get_air_roll_rate(state, agent)
+            reward *= abs(roll_rate)
         return reward
 
 
@@ -378,9 +357,11 @@ class TouchReward(RewardFunction[AgentID, GameState, float]):
         self.prev_ball = None
         self.last_target_hit_tick = None
         self.last_touch_tick = None
+        self.prev_car_vel = None
 
     def reset(self, agents: List[AgentID], initial_state: GameState, shared_info: Dict[str, Any]) -> None:
         self.prev_ball = initial_state.ball
+        self.prev_car_vel = None
         self.last_target_hit_tick = initial_state.tick_count
         self.current_target_index = 0
         self.last_touch_tick = None
@@ -395,6 +376,9 @@ class TouchReward(RewardFunction[AgentID, GameState, float]):
 
     def _get_reward(self, agent: AgentID, state: GameState, shared_info: Dict[str, Any]) -> float:
 
+        if self.prev_car_vel is None:
+            self.prev_car_vel = state.cars[agent].physics.linear_velocity
+
         condition_data = shared_info["condition_data"][shared_info["current_target_index"]]
         hit_ball = 1. if state.cars[agent].ball_touches > 0 else 0.
 
@@ -402,7 +386,7 @@ class TouchReward(RewardFunction[AgentID, GameState, float]):
             self.last_touch_tick = state.tick_count
         touch_reward_cooldown_active = False
         if self.last_touch_tick is not None:
-            touch_reward_cooldown_active = (state.tick_count - self.last_touch_tick) / TICKS_PER_SECOND < 0.5
+            touch_reward_cooldown_active = (state.tick_count - self.last_touch_tick) / TICKS_PER_SECOND < 0.8
 
         if state.cars[agent].physics.position[2] < 200.0 or state.ball.position[2] < 200.0:
             return 0.0
@@ -417,30 +401,48 @@ class TouchReward(RewardFunction[AgentID, GameState, float]):
 
         # measure how much upward velocity direction it gave the ball
         acceleration = (state.ball.linear_velocity - self.prev_ball.linear_velocity) / BALL_MAX_SPEED
-        accel_dir_z = acceleration[2] * 10.0
+        accel_dir_z = max(0.0, acceleration[2]) * 30.0
+        # if hit_ball > 0:
+        #     print(f"accel_dir_z: {accel_dir_z}")
+        #     print(f"accel_dir_z^2: {accel_dir_z**2}")
+
 
         if condition_data[GORILLA_GLUE_INDEX] > 0.5:
-            reward = hit_ball * vertical
+            reward = state.cars[agent].ball_touches * vertical
         else:
-            if touch_reward_cooldown_active:
-                return 0.0
-            reward = hit_ball * vertical * accel_dir_z
-
-        roll_rate = AirRollReward.get_air_roll_rate(state, agent)
-        reward *= abs(roll_rate)
+            
+            reward = accel_dir_z*accel_dir_z * hit_ball - hit_ball*state.cars[agent].ball_touches*3.5
+            # reward += 10.0*(self.prev_car_vel[2] - self.prev_ball.linear_velocity[2]) / BALL_MAX_SPEED
+            # if state.cars[agent].ball_touches > 0:
+            #     print(f"reward: {reward}, vel_diff: {10.0*(self.prev_car_vel[2] - self.prev_ball.linear_velocity[2]) / BALL_MAX_SPEED}")
+            # if touch_reward_cooldown_active:
+            #     reward *= 0.2
+            shared_info["hit_accel_dir_z"] = accel_dir_z
+            shared_info["num_ball_touches"] = state.cars[agent].ball_touches
+            
+            roll_rate = AirRollReward.get_air_roll_rate(state, agent)
+            reward *= abs(roll_rate)
         
         self.prev_ball = state.ball
+        self.prev_car_vel = state.cars[agent].physics.linear_velocity
         return reward
 
 class AirRollReward(RewardFunction[AgentID, GameState, float]):
     """
     A RewardFunction that gives a reward for using air roll.
     """
+    def __init__(self):
+        self.last_target_hit_tick = None
+
     def reset(self, agents: List[AgentID], initial_state: GameState, shared_info: Dict[str, Any]) -> None:
-        pass
+        self.current_target_index = 0
+        self.last_target_hit_tick = initial_state.tick_count
 
     def get_rewards(self, agents: List[AgentID], state: GameState, is_terminated: Dict[AgentID, bool],
                     is_truncated: Dict[AgentID, bool], shared_info: Dict[str, Any]) -> Dict[AgentID, float]:
+        if self.current_target_index != shared_info["current_target_index"]:
+            self.last_target_hit_tick = state.tick_count
+            self.current_target_index = shared_info["current_target_index"]
         return {agent: self._get_reward(agent, state, shared_info) for agent in agents}
 
     @staticmethod
@@ -452,10 +454,18 @@ class AirRollReward(RewardFunction[AgentID, GameState, float]):
         return roll_rate
 
     def _get_reward(self, agent: AgentID, state: GameState, shared_info: Dict[str, Any]) -> float:
+        condition_data = shared_info["condition_data"][shared_info["current_target_index"]]
+
+        if (state.tick_count - self.last_target_hit_tick) / TICKS_PER_SECOND > 2:
+            return 0.0
         roll_rate = self.get_air_roll_rate(state, agent)
         # yaw_rate = abs(omega_body[1]) / 9.11
         shared_info["air_roll_rate"] = abs(roll_rate)
         air_roll_action = -shared_info["air_roll_action"]
+
+        if condition_data[GORILLA_GLUE_INDEX] > 0.5:
+            return -1.0 if air_roll_action != 0 else 0.0
+
         if roll_rate > 0.0: roll_rate = 1.0
         elif roll_rate < 0.0: roll_rate = -1.0
         else: roll_rate = 0.0
@@ -475,3 +485,4 @@ class AirRollReward(RewardFunction[AgentID, GameState, float]):
         #     rol_is_aligned = 0.0
         # print(f"roll_rate: {roll_rate:.4f}, air_roll_action: {air_roll_action}")
         # return rol_is_aligned
+

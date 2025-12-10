@@ -13,7 +13,7 @@ GOAL_CENTER_TO_POST = 892.755
 CORNER_CATHETUS_LENGTH = 1152
 
 # Margins
-FLOOR_MARGIN = 350
+FLOOR_MARGIN = 500
 CEILING_MARGIN = 350
 WALL_MARGIN = 100
 
@@ -243,7 +243,7 @@ def generate_random_path(step_distance=1000):
     
     # Strength factors
     min_strength = 0.38
-    max_strength = 1.5 
+    max_strength = 1.1
     
     # Linear interpolation of strength based on length
     if path_length <= min_dist:
@@ -265,12 +265,16 @@ def generate_random_path(step_distance=1000):
     glue_conditions = np.zeros(num_path_points, dtype=np.float32)
     
     if num_path_points > 0:
-        split_point = random.randint(0, num_path_points)
-        first_val = random.choice([0.0, 1.0])
-        second_val = 1.0 - first_val
-        
-        glue_conditions[:split_point] = first_val
-        glue_conditions[split_point:] = second_val
+        if num_path_points <= 5:
+            val = random.choice([0.0, 1.0])
+            glue_conditions[:] = val
+        else:
+            split_point = random.randint(0, num_path_points)
+            first_val = random.choice([0.0, 1.0])
+            second_val = 1.0 - first_val
+            
+            glue_conditions[:split_point] = first_val
+            glue_conditions[split_point:] = second_val
     
     return path_points, start_point, end_point, raw_control_point, glue_conditions
 

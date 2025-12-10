@@ -176,6 +176,8 @@ class AirDribbleDirectedMutator(AirDribbleMutator):
         shared_info["air_roll_rate"] = 0.0
         shared_info["air_roll_action"] = 0
         shared_info["condition_data"] = condition_data
+        shared_info["hit_accel_dir_z"] = -1.0
+        shared_info["num_ball_touches"] = 0
         
         # Re-position cars based on the new ball position (Start Point)
         # This reuses the logic from AirDribbleMutator but applies it to the new ball location
@@ -196,7 +198,7 @@ class AirDribbleDirectedMutator(AirDribbleMutator):
         spawn_max_z = common_values.CEILING_Z - CEILING_MARGIN
         
         car_min_height_under_ball = 100 
-        car_max_height_under_ball = 400
+        car_max_height_under_ball = 500
         car_x_radius = 20
         car_y_min = 20
         car_y_max = 20

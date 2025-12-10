@@ -91,7 +91,6 @@ def build_rlgym_v2_env(debug=False):
         GoalReward,
         DistancePlayerToBallReward,
         BallToGoalReward,
-        DistancePlayerToGround,
         VelocityPlayerToBallReward,
         TouchReward,
         ForwardBiasReward,
@@ -211,11 +210,10 @@ def build_rlgym_v2_env(debug=False):
     )
 
     goal_reward_weight = 16.0
-    touch_reward_weight = 2.0
-    distance_player_to_ball_reward_weight = 1.5 *0.3 *0.0
-    velocity_player_to_ball_reward_weight = 0.5 *0.3 * 0.0
+    touch_reward_weight = 6.0
+    distance_player_to_ball_reward_weight = 0.5
+    velocity_player_to_ball_reward_weight = 0.4*0.
     ball_to_goal_reward_weight = 1.5 * 0
-    distance_player_to_ground_reward_weight = 1.5*0
     forward_bias_reward_weight = 0.5*0
     zone_reward_weight = 1.0
     ball_zone_reward_weight = 4.0
@@ -229,12 +227,11 @@ def build_rlgym_v2_env(debug=False):
         (DistancePlayerToBallReward(), distance_player_to_ball_reward_weight),
         (VelocityPlayerToBallReward(), velocity_player_to_ball_reward_weight),
         (BallToGoalReward(), ball_to_goal_reward_weight),
-        (DistancePlayerToGround(), distance_player_to_ground_reward_weight),
         (ForwardBiasReward(), forward_bias_reward_weight),
         (ZoneReward(), zone_reward_weight),
         (BoostChangeReward(), boost_change_reward_weight),
         (BallZoneReward(), ball_zone_reward_weight),
-        (BallToTargetReward(print_hits=debug), ball_to_target_reward_weight),
+        (BallToTargetReward(print_hits=False), ball_to_target_reward_weight),
         (AirRollReward(), air_roll_reward_weight),
     )
 
@@ -303,7 +300,7 @@ def build_rlgym_v2_env(debug=False):
         boost_coef=1 / 100.0,
     )
 
-    random.seed(123123)
+    random.seed(42)
     
     state_mutator = MutatorSequence(
         FixedTeamSizeMutator(blue_size=blue_team_size, orange_size=orange_team_size),
@@ -421,6 +418,8 @@ if __name__ == "__main__":
                     "air_roll_rate": PyAnySerdeType.FLOAT(),
                     "air_roll_action": PyAnySerdeType.INT(),
                     "condition_data": PyAnySerdeType.NUMPY(np.float32),
+                    "hit_accel_dir_z": PyAnySerdeType.FLOAT(),
+                    "num_ball_touches": PyAnySerdeType.INT(),
                 }),
             ),
             timestep_limit=60_000_000_000,  # Train for 60B steps
