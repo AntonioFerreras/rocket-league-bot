@@ -58,7 +58,7 @@ class PathVisualizer:
         
         self.condition_labels = []
         # Indices 6 to 15
-        self.condition_names = ["Gorilla Glue"] + [""] * 9 
+        self.condition_names = ["Gorilla Glue", "Flip Reset"] + [""] * 8 
         
         for name in self.condition_names:
             # If name is empty, the label exists but might be invisible depending on layout/text.
@@ -134,15 +134,20 @@ class PathVisualizer:
         for i, (px, py) in enumerate(td_points):
             color = "yellow"
             is_glue = False
+            is_flip_reset = False
             if condition_data is not None and i < len(condition_data):
                 if len(condition_data.shape) == 1:
                      if condition_data[i] > 0.5: is_glue = True
                 elif condition_data.shape[1] > 6:
                      if condition_data[i, 6] > 0.5: is_glue = True
+                     if condition_data.shape[1] > 7 and condition_data[i, 7] > 0.5: is_flip_reset = True
             
             if is_glue:
                 color = "orange"
             self.canvas.create_oval(px-2, py-2, px+2, py+2, fill=color, outline=color)
+            
+            if is_flip_reset:
+                 self.canvas.create_text(px + 10, py, text="FR", font=("Arial", 8), fill="black")
         
         # Start/End/Control Top-Down
         sx, sy = self.transform_top_down(start[0], start[1])
@@ -165,15 +170,20 @@ class PathVisualizer:
         for i, (px, py) in enumerate(sv_points):
             color = "yellow"
             is_glue = False
+            is_flip_reset = False
             if condition_data is not None and i < len(condition_data):
                 if len(condition_data.shape) == 1:
                      if condition_data[i] > 0.5: is_glue = True
                 elif condition_data.shape[1] > 6:
                      if condition_data[i, 6] > 0.5: is_glue = True
+                     if condition_data.shape[1] > 7 and condition_data[i, 7] > 0.5: is_flip_reset = True
             
             if is_glue:
                 color = "orange"
             self.canvas.create_oval(px-2, py-2, px+2, py+2, fill=color, outline=color)
+
+            if is_flip_reset:
+                 self.canvas.create_text(px + 10, py, text="FR", font=("Arial", 8), fill="black")
         
         # Start/End/Control Side View
         sx, sy = self.transform_side_view(start[1], start[2])
@@ -299,11 +309,15 @@ class PathVisualizer:
         except ValueError:
             step_dist = 1000
             
-        path, start, end, control, glue_conditions = generate_random_path(step_distance=step_dist)
+        path, start, end, control, glue_conditions, flip_reset_conditions = generate_random_path(step_distance=step_dist)
         
-        # In standalone, we only have glue conditions (1D array)
-        # show_path handles 1D array as the glue column
-        self.show_path(path, start, end, control, condition_data=glue_conditions)
+        # In standalone, we create a 2D array to hold both conditions
+        num_points = len(path)
+        condition_data = np.zeros((num_points, 16), dtype=np.float32)
+        condition_data[:, 6] = glue_conditions
+        condition_data[:, 7] = flip_reset_conditions
+        
+        self.show_path(path, start, end, control, condition_data=condition_data)
 
     def update_ball(self, position):
         x, y, z = position

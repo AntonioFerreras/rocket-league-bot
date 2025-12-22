@@ -99,6 +99,7 @@ def build_rlgym_v2_env(debug=False):
         BoostChangeReward,
         BallToTargetReward,
         AirRollReward,
+        FlipResetReward,
     )
     from mutators import AirDribbleMutator, AirDribbleDirectedMutator
 
@@ -220,6 +221,7 @@ def build_rlgym_v2_env(debug=False):
     boost_change_reward_weight = 0.5*0
     ball_to_target_reward_weight = 10.0
     air_roll_reward_weight = 5.0
+    flip_reset_reward_weight = 25.0
 
     reward_fn = CombinedReward(
         (GoalReward(), goal_reward_weight),
@@ -233,6 +235,7 @@ def build_rlgym_v2_env(debug=False):
         (BallZoneReward(), ball_zone_reward_weight),
         (BallToTargetReward(print_hits=False), ball_to_target_reward_weight),
         (AirRollReward(), air_roll_reward_weight),
+        (FlipResetReward(), flip_reset_reward_weight),
     )
 
     class FreestyleObs(DefaultObs):
@@ -420,6 +423,7 @@ if __name__ == "__main__":
                     "condition_data": PyAnySerdeType.NUMPY(np.float32),
                     "hit_accel_dir_z": PyAnySerdeType.FLOAT(),
                     "num_ball_touches": PyAnySerdeType.INT(),
+                    "num_flip_resets": PyAnySerdeType.INT(),
                 }),
             ),
             timestep_limit=60_000_000_000,  # Train for 60B steps
@@ -433,7 +437,7 @@ if __name__ == "__main__":
             "PPO1": PPOAgentControllerConfigModel(
                 checkpoint_load_folder=args.resume_ckpt,
                 add_unix_timestamp=False,
-                save_every_ts=10_000_000,
+                save_every_ts=2_000_000,
                 n_checkpoints_to_keep=10,
                 timesteps_per_iteration=370_000,
                 learner_config=PPOLearnerConfigModel(

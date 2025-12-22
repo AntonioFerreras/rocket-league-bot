@@ -133,7 +133,7 @@ class AirDribbleDirectedMutator(AirDribbleMutator):
         super().apply(state, shared_info)
         
         # Generate a path
-        path_points, start_point, end_point, control_point, glue_conditions = generate_random_path(step_distance=1000)
+        path_points, start_point, end_point, control_point, glue_conditions, flip_reset_conditions = generate_random_path(step_distance=1000)
 
         num_path_points = len(path_points)
         condition_data = np.zeros((num_path_points, self.num_conditions), dtype=np.float32)
@@ -141,6 +141,7 @@ class AirDribbleDirectedMutator(AirDribbleMutator):
         # Set 7th flag (index 6) based on generated glue conditions
         if num_path_points > 0:
             condition_data[:, 6] = glue_conditions
+            condition_data[:, 7] = flip_reset_conditions
         
         
         # Override Ball Position to be the Start Point
@@ -178,6 +179,7 @@ class AirDribbleDirectedMutator(AirDribbleMutator):
         shared_info["condition_data"] = condition_data
         shared_info["hit_accel_dir_z"] = -1.0
         shared_info["num_ball_touches"] = 0
+        shared_info["num_flip_resets"] = 0
         
         # Re-position cars based on the new ball position (Start Point)
         # This reuses the logic from AirDribbleMutator but applies it to the new ball location

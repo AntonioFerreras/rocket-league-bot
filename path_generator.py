@@ -167,6 +167,9 @@ def sample_points_on_path(start_point, control_point, end_point, step_distance):
             
     return np.array(final_points)
 
+GORILLA_GLUE_INDEX = 6
+FLIP_RESET_INDEX = 7
+
 def generate_random_path(step_distance=1000):
     """
     Generates a smooth random path (quadratic bezier) from a random point
@@ -275,7 +278,19 @@ def generate_random_path(step_distance=1000):
             
             glue_conditions[:split_point] = first_val
             glue_conditions[split_point:] = second_val
-    
-    return path_points, start_point, end_point, raw_control_point, glue_conditions
+
+    # 50/50 chance to clear all glue conditions
+    if random.choice([True, False]):
+        glue_conditions[:] = 0.0
+
+    # Generate Flip Reset conditions (Index 7)
+    flip_reset_conditions = np.zeros(num_path_points, dtype=np.float32)
+    if num_path_points > 0:
+        non_glue_indices = glue_conditions == 0.0
+        # If we have any non-glue points, 50/50 chance to set flip reset for ALL of them
+        if np.any(non_glue_indices):
+            if random.random() < 0.7:
+                flip_reset_conditions[non_glue_indices] = 1.0
+    return path_points, start_point, end_point, raw_control_point, glue_conditions, flip_reset_conditions
 
 

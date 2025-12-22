@@ -6,9 +6,9 @@ from rlgym.rocket_league.api import GameState
 from rlgym.rocket_league.common_values import BALL_RADIUS, CAR_MAX_SPEED, BLUE_TEAM, ORANGE_TEAM, ORANGE_GOAL_BACK, \
     BLUE_GOAL_BACK, BALL_MAX_SPEED, BACK_WALL_Y, BACK_NET_Y, SIDE_WALL_X, CEILING_Z, CAR_MAX_ANG_VEL, TICKS_PER_SECOND
 
-from math_utils import normalize
+from math_utils import normalize, cosine_similarity
 
-GORILLA_GLUE_INDEX = 6
+from path_generator import GORILLA_GLUE_INDEX, FLIP_RESET_INDEX
 
 def height_sigmoid(height: float) -> float:
     return 0.5 * np.tanh((height - 900) / 250) + 0.5
@@ -82,7 +82,7 @@ class DistancePlayerToBallReward(RewardFunction[AgentID, GameState, float]):
     def _get_reward(self, agent: AgentID, state: GameState, shared_info: Dict[str, Any]) -> float:
         condition_data = shared_info["condition_data"][shared_info["current_target_index"]]
 
-        if state.cars[agent].physics.position[2] < 200.0 or state.ball.position[2] < 200.0:
+        if state.cars[agent].physics.position[2] < 100.0 or state.ball.position[2] < 150.0:
             return 0.0
 
         # Compensate for inside of ball being unreachable (keep max reward at 1)
@@ -121,7 +121,7 @@ class VelocityPlayerToBallReward(RewardFunction[AgentID, GameState, float]):
         ball = state.ball
         car = state.cars[agent].physics
 
-        if car.position[2] < 200.0 or ball.position[2] < 200.0:
+        if car.position[2] < 100.0 or ball.position[2] < 150.0:
             return 0.0
 
         if self.use_trajectory_comparison:
@@ -265,9 +265,11 @@ class BallToTargetReward(RewardFunction[AgentID, GameState, float]):
             hit_target_reward = 0.0
         reward = hit_target_reward + dot_product*5.0
         condition_data = shared_info["condition_data"][shared_info["current_target_index"]]
-        if condition_data[GORILLA_GLUE_INDEX] < 0.5:
+        if condition_data[GORILLA_GLUE_INDEX] < 0.5 and condition_data[FLIP_RESET_INDEX] < 0.5:
             roll_rate = AirRollReward.get_air_roll_rate(state, agent)
             reward *= abs(roll_rate)
+        if condition_data[FLIP_RESET_INDEX] > 0.5:
+            reward *= 0.4
         return reward
 
 
@@ -388,7 +390,7 @@ class TouchReward(RewardFunction[AgentID, GameState, float]):
         if self.last_touch_tick is not None:
             touch_reward_cooldown_active = (state.tick_count - self.last_touch_tick) / TICKS_PER_SECOND < 0.8
 
-        if state.cars[agent].physics.position[2] < 200.0 or state.ball.position[2] < 200.0:
+        if state.cars[agent].physics.position[2] < 100.0 or state.ball.position[2] < 150.0:
             return 0.0
 
         if (state.tick_count - self.last_target_hit_tick) / TICKS_PER_SECOND > 2:
@@ -406,12 +408,17 @@ class TouchReward(RewardFunction[AgentID, GameState, float]):
         #     print(f"accel_dir_z: {accel_dir_z}")
         #     print(f"accel_dir_z^2: {accel_dir_z**2}")
 
+        # if condition_data[FLIP_RESET_INDEX] > 0.5:
+        #     return 0.0
 
         if condition_data[GORILLA_GLUE_INDEX] > 0.5:
             reward = state.cars[agent].ball_touches * vertical
-        else:
+        elif condition_data[FLIP_RESET_INDEX] < 0.5:
             
-            reward = accel_dir_z*accel_dir_z * hit_ball - hit_ball*state.cars[agent].ball_touches*3.5
+            reward = accel_dir_z*accel_dir_z * hit_ball * 0.25
+            roll_rate = AirRollReward.get_air_roll_rate(state, agent)
+            reward *= abs(roll_rate)
+            reward -= hit_ball*state.cars[agent].ball_touches*3.5
             # reward += 10.0*(self.prev_car_vel[2] - self.prev_ball.linear_velocity[2]) / BALL_MAX_SPEED
             # if state.cars[agent].ball_touches > 0:
             #     print(f"reward: {reward}, vel_diff: {10.0*(self.prev_car_vel[2] - self.prev_ball.linear_velocity[2]) / BALL_MAX_SPEED}")
@@ -420,11 +427,14 @@ class TouchReward(RewardFunction[AgentID, GameState, float]):
             shared_info["hit_accel_dir_z"] = accel_dir_z
             shared_info["num_ball_touches"] = state.cars[agent].ball_touches
             
-            roll_rate = AirRollReward.get_air_roll_rate(state, agent)
-            reward *= abs(roll_rate)
+            
+        else:
+            reward = -hit_ball*state.cars[agent].ball_touches*2.0
+            
         
         self.prev_ball = state.ball
         self.prev_car_vel = state.cars[agent].physics.linear_velocity
+        
         return reward
 
 class AirRollReward(RewardFunction[AgentID, GameState, float]):
@@ -465,6 +475,8 @@ class AirRollReward(RewardFunction[AgentID, GameState, float]):
 
         if condition_data[GORILLA_GLUE_INDEX] > 0.5:
             return -1.0 if air_roll_action != 0 else 0.0
+        if condition_data[FLIP_RESET_INDEX] > 0.5:
+            return 0.0
 
         if roll_rate > 0.0: roll_rate = 1.0
         elif roll_rate < 0.0: roll_rate = -1.0
@@ -486,3 +498,71 @@ class AirRollReward(RewardFunction[AgentID, GameState, float]):
         # print(f"roll_rate: {roll_rate:.4f}, air_roll_action: {air_roll_action}")
         # return rol_is_aligned
 
+class FlipResetReward(RewardFunction[AgentID, GameState, float]):
+    def __init__(self, obtain_flip_weight: float = 6.0, hit_ball_weight: float = 6.0, down_facing_ball_weight: float = 0.8):
+        self.obtain_flip_weight = obtain_flip_weight
+        self.hit_ball_weight = hit_ball_weight
+        self.down_facing_ball_weight = down_facing_ball_weight
+
+        self.prev_state = None
+        self.has_reset = None
+        self.has_flipped = None
+        self.down_facing_juice = None
+
+    def reset(self, agents: List[AgentID], initial_state: GameState, shared_info: Dict[str, Any]) -> None:
+        self.prev_state = initial_state
+        self.has_reset = set()
+        self.has_flipped = set()
+        self.down_facing_juice = self.obtain_flip_weight
+        
+    def get_rewards(self, agents: List[AgentID], state: GameState, is_terminated: Dict[AgentID, bool],
+                    is_truncated: Dict[AgentID, bool], shared_info: Dict[str, Any]) -> Dict[AgentID, float]:
+        rewards = {k: 0.0 for k in agents}
+
+        condition_data = shared_info["condition_data"][shared_info["current_target_index"]]
+        if condition_data[FLIP_RESET_INDEX] < 0.5:
+            return rewards
+
+        for agent in agents:
+            car = state.cars[agent]
+            down = -car.physics.up
+            car_ball = state.ball.position - car.physics.position
+            cossim_down_ball = max(0, cosine_similarity(down, car_ball))
+            if car.ball_touches > 0 and car.has_flip and not self.prev_state.cars[agent].has_flip:
+                if cossim_down_ball > 0.5 ** 0.5:  # 45 degrees
+                    self.has_reset.add(agent)
+                    rewards[agent] = 0.0
+                    if state.cars[agent].physics.position[2] > 80.0:
+                        rewards[agent] += self.obtain_flip_weight
+                    shared_info["num_flip_resets"] += 1
+            elif car.on_ground:
+                self.has_reset.discard(agent)
+                self.has_flipped.discard(agent)
+            elif car.is_flipping and agent in self.has_reset:
+                self.has_reset.remove(agent)
+                self.has_flipped.add(agent)
+                self.down_facing_juice = self.obtain_flip_weight
+            if car.ball_touches > 0 and agent in self.has_flipped:
+                self.has_flipped.remove(agent)
+                rewards[agent] = self.hit_ball_weight
+            
+            # dist to ball decreasing while down is facing ball
+            prev_dist_to_ball = np.linalg.norm(self.prev_state.cars[agent].physics.position - self.prev_state.ball.position) - BALL_RADIUS
+            curr_dist_to_ball = np.linalg.norm(car.physics.position - state.ball.position) - BALL_RADIUS
+            dist_decreasing = prev_dist_to_ball > curr_dist_to_ball
+            close_to_ground = state.cars[agent].physics.position[2] < 80.0 or state.ball.position[2] < 150.0
+            if close_to_ground:
+                self.down_facing_juice = 0.0
+            decrease_rate = (prev_dist_to_ball - curr_dist_to_ball)
+
+            # if prev_dist_to_ball > curr_dist_to_ball:
+            if curr_dist_to_ball < 100 and self.down_facing_juice > 0.0 and decrease_rate > 7.0:
+                pointing_in_motion_direction = np.dot(normalize(state.cars[agent].physics.forward[:2]), normalize(state.cars[agent].physics.linear_velocity[:2])) > 0.766044443
+                close_reward = self.down_facing_ball_weight * (cossim_down_ball*2.0 - 1.0) * (0.5 if not pointing_in_motion_direction else 1.0) # np.exp(-60.0 * curr_dist_to_ball / CAR_MAX_SPEED)  # * max(0.0, (prev_dist_to_ball - curr_dist_to_ball)) / CAR_MAX_SPEED
+                if decrease_rate > 30.0 and close_reward > 0.0:
+                    close_reward *= 2.0
+                
+                rewards[agent] += close_reward
+                self.down_facing_juice -= close_reward
+        self.prev_state = state
+        return rewards

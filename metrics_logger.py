@@ -55,6 +55,8 @@ class PPOMetricsLogger(
         raw_num_ball_touches = [shared_info.get("num_ball_touches", 0) if shared_info is not None else 0.0 for shared_info in data]
         filtered_num_ball_touches = [x for x in raw_num_ball_touches if x > 0]
         avg_num_ball_touches = np.mean(filtered_num_ball_touches) if filtered_num_ball_touches else 0.0
+        max_num_flip_resets = np.max([shared_info.get("num_flip_resets", 0) if shared_info is not None else 0.0 for shared_info in data])
+        avg_num_flip_resets = np.mean([shared_info.get("num_flip_resets", 0) if shared_info is not None else 0.0 for shared_info in data])
 
         self.state_metrics = {
             "Tracked metrics": {
@@ -65,6 +67,8 @@ class PPOMetricsLogger(
                 "Average air roll rate": avg_air_roll_rate,
                 "Average hit acceleration direction z": avg_hit_accel_dir_z,
                 "Average number of ball touches": avg_num_ball_touches,
+                "Max number of flip resets": max_num_flip_resets,
+                "Avg number of flip resets": avg_num_flip_resets,
             }
         }
 

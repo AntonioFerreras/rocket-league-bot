@@ -33,3 +33,14 @@ def normalize(x: np.array) -> np.array:
     if norm == 0:
        return x
     return x / norm
+
+def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
+    """
+    Computes the cosine similarity between two vectors.
+
+    :param a: A numpy array of size n.
+    :param b: A numpy array of size n.
+
+    :return: A float representing the cosine similarity.
+    """
+    return np.dot(a / np.linalg.norm(a), b / np.linalg.norm(b))
