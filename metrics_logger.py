@@ -58,6 +58,10 @@ class PPOMetricsLogger(
         max_num_flip_resets = np.max([shared_info.get("num_flip_resets", 0) if shared_info is not None else 0.0 for shared_info in data])
         avg_num_flip_resets = np.mean([shared_info.get("num_flip_resets", 0) if shared_info is not None else 0.0 for shared_info in data])
 
+        raw_reset_dists = [shared_info.get("reset_distance_to_goal") for shared_info in data if shared_info is not None]
+        filtered_reset_dists = [x for x in raw_reset_dists if x is not None and x != -1 and x != -1.0]
+        avg_reset_dist = np.mean(filtered_reset_dists) if filtered_reset_dists else 0.0
+
         self.state_metrics = {
             "Tracked metrics": {
                 "Average ball height": np.mean([shared_info.get("ball_z", 0.0) if shared_info is not None else 0.0 for shared_info in data]),
@@ -69,6 +73,7 @@ class PPOMetricsLogger(
                 "Average number of ball touches": avg_num_ball_touches,
                 "Max number of flip resets": max_num_flip_resets,
                 "Avg number of flip resets": avg_num_flip_resets,
+                "Average reset distance": avg_reset_dist,
             }
         }
 

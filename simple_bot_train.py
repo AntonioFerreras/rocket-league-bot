@@ -233,9 +233,9 @@ def build_rlgym_v2_env(debug=False):
         (ZoneReward(), zone_reward_weight),
         (BoostChangeReward(), boost_change_reward_weight),
         (BallZoneReward(), ball_zone_reward_weight),
-        (BallToTargetReward(print_hits=False), ball_to_target_reward_weight),
+        (BallToTargetReward(print_hits=debug), ball_to_target_reward_weight),
         (AirRollReward(), air_roll_reward_weight),
-        (FlipResetReward(), flip_reset_reward_weight),
+        (FlipResetReward(debug=debug), flip_reset_reward_weight),
     )
 
     class FreestyleObs(DefaultObs):
@@ -303,7 +303,7 @@ def build_rlgym_v2_env(debug=False):
         boost_coef=1 / 100.0,
     )
 
-    random.seed(42)
+    # random.seed(42)
     
     state_mutator = MutatorSequence(
         FixedTeamSizeMutator(blue_size=blue_team_size, orange_size=orange_team_size),
@@ -424,6 +424,7 @@ if __name__ == "__main__":
                     "hit_accel_dir_z": PyAnySerdeType.FLOAT(),
                     "num_ball_touches": PyAnySerdeType.INT(),
                     "num_flip_resets": PyAnySerdeType.INT(),
+                    "reset_distance_to_goal": PyAnySerdeType.FLOAT(),
                 }),
             ),
             timestep_limit=60_000_000_000,  # Train for 60B steps

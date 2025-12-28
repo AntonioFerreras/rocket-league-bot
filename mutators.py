@@ -180,6 +180,7 @@ class AirDribbleDirectedMutator(AirDribbleMutator):
         shared_info["hit_accel_dir_z"] = -1.0
         shared_info["num_ball_touches"] = 0
         shared_info["num_flip_resets"] = 0
+        shared_info["reset_distance_to_goal"] = -1.0
         
         # Re-position cars based on the new ball position (Start Point)
         # This reuses the logic from AirDribbleMutator but applies it to the new ball location
