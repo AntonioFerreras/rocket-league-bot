@@ -291,6 +291,9 @@ def generate_random_path(step_distance=1000):
         if np.any(non_glue_indices):
             if random.random() < 0.7:
                 flip_reset_conditions[non_glue_indices] = 1.0
+
+                # first path point cant have flip reset
+                flip_reset_conditions[:1] = 0.0
     return path_points, start_point, end_point, raw_control_point, glue_conditions, flip_reset_conditions
 
 

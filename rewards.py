@@ -27,7 +27,8 @@ class GoalReward(RewardFunction[AgentID, GameState, float]):
 
     def _get_reward(self, agent: AgentID, state: GameState, shared_info: Dict[str, Any]) -> float:
         dist_path_end_to_ball = np.linalg.norm(state.ball.position - shared_info["path_points"][-1])
-        if state.cars[agent].physics.position[2] < 60.0 or dist_path_end_to_ball > 2300.0:
+        dist_car_to_ball = np.linalg.norm(state.cars[agent].physics.position - state.ball.position)
+        if state.cars[agent].physics.position[2] < 60.0 or dist_path_end_to_ball > 2300.0 or dist_car_to_ball > 550.0:
             return 0.0
         return state.goal_scored
             
@@ -92,7 +93,7 @@ class DistancePlayerToBallReward(RewardFunction[AgentID, GameState, float]):
             return 0.0
 
         dist = np.linalg.norm(state.cars[agent].physics.position - (state.ball.position)) - BALL_RADIUS
-        dist_reward = np.exp(-100.0 * dist / CAR_MAX_SPEED)  # Inspired by https://arxiv.org/abs/2105.12196
+        dist_reward = 0.2*np.exp(-100.0 * dist / CAR_MAX_SPEED)  # Inspired by https://arxiv.org/abs/2105.12196
 
         # height_reward = height_sigmoid(state.cars[agent].physics.position[2])
         return dist_reward #* height_reward
@@ -273,7 +274,7 @@ class BallToTargetReward(RewardFunction[AgentID, GameState, float]):
             roll_rate = AirRollReward.get_air_roll_rate(state, agent)
             reward *= abs(roll_rate)
         if condition_data[FLIP_RESET_INDEX] > 0.5:
-            reward *= 0.6
+            reward *= 0.35
         return reward
 
 
@@ -416,7 +417,7 @@ class TouchReward(RewardFunction[AgentID, GameState, float]):
         #     return 0.0
 
         if condition_data[GORILLA_GLUE_INDEX] > 0.5:
-            reward = state.cars[agent].ball_touches * vertical
+            reward = state.cars[agent].ball_touches * vertical*.2
         elif condition_data[FLIP_RESET_INDEX] < 0.5:
             
             reward = 0.0 # accel_dir_z*accel_dir_z * hit_ball * 0.25
@@ -523,7 +524,7 @@ class FlipResetReward(RewardFunction[AgentID, GameState, float]):
         self.prev_state = initial_state
         self.has_reset = set()
         self.has_flipped = set()
-        self.down_facing_juice = self.obtain_flip_weight
+        self.down_facing_juice = self.obtain_flip_weight*0.5
         self.last_target_hit_tick = initial_state.tick_count
         self.current_target_index = 0
 
@@ -549,28 +550,34 @@ class FlipResetReward(RewardFunction[AgentID, GameState, float]):
             down = -car.physics.up
             car_ball = state.ball.position - car.physics.position
             cossim_down_ball = max(0, cosine_similarity(down, car_ball))
+            distance_to_goal = np.linalg.norm(state.cars[agent].physics.position - shared_info["path_points"][-1])
+            distance_scale = min(1.0 + 1.5*max(0.0, distance_to_goal - 2300.0)/2300.0, 4.0)
             if car.ball_touches > 0 and car.has_flip and not self.prev_state.cars[agent].has_flip:
                 if cossim_down_ball > 0.5 ** 0.5:  # 45 degrees
                     self.has_reset.add(agent)
                     rewards[agent] = 0.0
                     
                     shared_info["num_flip_resets"] += 1
-                    shared_info["reset_distance_to_goal"] = np.linalg.norm(state.cars[agent].physics.position - shared_info["path_points"][-1])
+                    shared_info["reset_distance_to_goal"] = distance_to_goal
 
-                    distance_scale = min(1.0 + 1.5*max(0.0, shared_info["reset_distance_to_goal"] - 2300.0)/2300.0, 4.0)
+                    
                     multi_scale = 2.0 if shared_info["num_flip_resets"] > 1 else 1.0
+                    first_reset_ball_vel_scale = 0.5 + (min(200, max(-600, self.prev_state.ball.linear_velocity[2])) + 600) * (1.0 / 800)
+                    if shared_info["num_flip_resets"] > 0:
+                        first_reset_ball_vel_scale = 1.0
                     if state.cars[agent].physics.position[2] > 80.0:
-                        rewards[agent] += self.obtain_flip_weight*distance_scale*multi_scale
+                        rewards[agent] += self.obtain_flip_weight*distance_scale*multi_scale*first_reset_ball_vel_scale
 
                     if self.debug:
                         print(f"Flip reset {shared_info["num_flip_resets"]} distance to goal {shared_info["reset_distance_to_goal"]}")
+                        print(f"Ball z velocity: {self.prev_state.ball.linear_velocity[2]}")
             elif car.on_ground:
                 self.has_reset.discard(agent)
                 self.has_flipped.discard(agent)
             elif car.is_flipping and agent in self.has_reset:
                 self.has_reset.remove(agent)
                 self.has_flipped.add(agent)
-                self.down_facing_juice = self.obtain_flip_weight
+                self.down_facing_juice = self.obtain_flip_weight*0.5
             if car.ball_touches > 0 and agent in self.has_flipped:
                 self.has_flipped.remove(agent)
                 rewards[agent] = self.hit_ball_weight
@@ -592,8 +599,9 @@ class FlipResetReward(RewardFunction[AgentID, GameState, float]):
                 close_reward = self.down_facing_ball_weight * (cossim_down_ball*2.0 - 1.0) * (0.5 if (not pointing_in_motion_direction and shared_info["num_flip_resets"] == 0) else 1.0)
                 if decrease_rate > 30.0 and close_reward > 0.0:
                     close_reward *= 2.0
-                
-                rewards[agent] += close_reward
+                    
                 self.down_facing_juice -= close_reward
+                
+                rewards[agent] += close_reward*distance_scale
         self.prev_state = state
         return rewards
