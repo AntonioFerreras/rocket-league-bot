@@ -58,7 +58,7 @@ class PathVisualizer:
         
         self.condition_labels = []
         # Indices 6 to 15
-        self.condition_names = ["Gorilla Glue", "Flip Reset"] + [""] * 8 
+        self.condition_names = ["Gorilla Glue", "Flip Reset", "Setup"] + [""] * 7 
         
         for name in self.condition_names:
             # If name is empty, the label exists but might be invisible depending on layout/text.
@@ -115,7 +115,7 @@ class PathVisualizer:
             else:
                 lbl.config(fg="#bbbbbb") # close to background
 
-    def show_path(self, path, start, end, control, condition_data=None):
+    def show_path(self, path, start, end, control, condition_data=None, path_info=None):
         self.canvas.delete("all")
         
         self.condition_data = condition_data
@@ -135,14 +135,18 @@ class PathVisualizer:
             color = "yellow"
             is_glue = False
             is_flip_reset = False
+            is_setup = False
             if condition_data is not None and i < len(condition_data):
                 if len(condition_data.shape) == 1:
                      if condition_data[i] > 0.5: is_glue = True
                 elif condition_data.shape[1] > 6:
                      if condition_data[i, 6] > 0.5: is_glue = True
                      if condition_data.shape[1] > 7 and condition_data[i, 7] > 0.5: is_flip_reset = True
+                     if condition_data.shape[1] > 8 and condition_data[i, 8] > 0.5: is_setup = True
             
-            if is_glue:
+            if is_setup:
+                color = "green"
+            elif is_glue:
                 color = "orange"
             self.canvas.create_oval(px-2, py-2, px+2, py+2, fill=color, outline=color)
             
@@ -151,7 +155,7 @@ class PathVisualizer:
         
         # Start/End/Control Top-Down
         sx, sy = self.transform_top_down(start[0], start[1])
-        self.canvas.create_oval(sx-4, sy-4, sx+4, sy+4, fill="green")
+        self.canvas.create_oval(sx-4, sy-4, sx+4, sy+4, fill="lime")
         
         ex, ey = self.transform_top_down(end[0], end[1])
         self.canvas.create_line(ex-5, ey-5, ex+5, ey+5, fill="red", width=2)
@@ -159,6 +163,12 @@ class PathVisualizer:
         
         cx, cy = self.transform_top_down(control[0], control[1])
         self.canvas.create_oval(cx-2, cy-2, cx+2, cy+2, fill="gray")
+        
+        # Draw car spawn for setup paths
+        if path_info is not None and path_info.get("has_setup") and path_info.get("car_spawn") is not None:
+            car_spawn = path_info["car_spawn"]
+            csx, csy = self.transform_top_down(car_spawn[0], car_spawn[1])
+            self.canvas.create_rectangle(csx-5, csy-5, csx+5, csy+5, fill="cyan", outline="blue")
         
         # Draw Path Side View
         sv_points = [self.transform_side_view(p[1], p[2]) for p in path]
@@ -171,14 +181,18 @@ class PathVisualizer:
             color = "yellow"
             is_glue = False
             is_flip_reset = False
+            is_setup = False
             if condition_data is not None and i < len(condition_data):
                 if len(condition_data.shape) == 1:
                      if condition_data[i] > 0.5: is_glue = True
                 elif condition_data.shape[1] > 6:
                      if condition_data[i, 6] > 0.5: is_glue = True
                      if condition_data.shape[1] > 7 and condition_data[i, 7] > 0.5: is_flip_reset = True
+                     if condition_data.shape[1] > 8 and condition_data[i, 8] > 0.5: is_setup = True
             
-            if is_glue:
+            if is_setup:
+                color = "green"
+            elif is_glue:
                 color = "orange"
             self.canvas.create_oval(px-2, py-2, px+2, py+2, fill=color, outline=color)
 
@@ -187,7 +201,7 @@ class PathVisualizer:
         
         # Start/End/Control Side View
         sx, sy = self.transform_side_view(start[1], start[2])
-        self.canvas.create_oval(sx-4, sy-4, sx+4, sy+4, fill="green")
+        self.canvas.create_oval(sx-4, sy-4, sx+4, sy+4, fill="lime")
         
         ex, ey = self.transform_side_view(end[1], end[2])
         self.canvas.create_line(ex-5, ey-5, ex+5, ey+5, fill="red", width=2)
@@ -195,6 +209,12 @@ class PathVisualizer:
         
         cx, cy = self.transform_side_view(control[1], control[2])
         self.canvas.create_oval(cx-2, cy-2, cx+2, cy+2, fill="gray")
+        
+        # Draw car spawn for setup paths (side view)
+        if path_info is not None and path_info.get("has_setup") and path_info.get("car_spawn") is not None:
+            car_spawn = path_info["car_spawn"]
+            csx, csy = self.transform_side_view(car_spawn[1], car_spawn[2])
+            self.canvas.create_rectangle(csx-5, csy-5, csx+5, csy+5, fill="cyan", outline="blue")
 
     def transform_top_down(self, x, y):
         # Map Field X/Y to Screen X/Y
@@ -309,15 +329,16 @@ class PathVisualizer:
         except ValueError:
             step_dist = 1000
             
-        path, start, end, control, glue_conditions, flip_reset_conditions = generate_random_path(step_distance=step_dist)
+        path, start, end, control, glue_conditions, flip_reset_conditions, setup_conditions, path_info = generate_random_path(step_distance=step_dist)
         
-        # In standalone, we create a 2D array to hold both conditions
+        # In standalone, we create a 2D array to hold all conditions
         num_points = len(path)
         condition_data = np.zeros((num_points, 16), dtype=np.float32)
         condition_data[:, 6] = glue_conditions
         condition_data[:, 7] = flip_reset_conditions
+        condition_data[:, 8] = setup_conditions
         
-        self.show_path(path, start, end, control, condition_data=condition_data)
+        self.show_path(path, start, end, control, condition_data=condition_data, path_info=path_info)
 
     def update_ball(self, position):
         x, y, z = position

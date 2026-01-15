@@ -133,46 +133,138 @@ class AirDribbleDirectedMutator(AirDribbleMutator):
         super().apply(state, shared_info)
         
         # Generate a path
-        path_points, start_point, end_point, control_point, glue_conditions, flip_reset_conditions = generate_random_path(step_distance=1000)
+        path_points, start_point, end_point, control_point, glue_conditions, flip_reset_conditions, setup_conditions, path_info = generate_random_path(step_distance=1000)
 
         num_path_points = len(path_points)
         condition_data = np.zeros((num_path_points, self.num_conditions), dtype=np.float32)
 
-        # Set 7th flag (index 6) based on generated glue conditions
+        # Set condition flags based on generated conditions
         if num_path_points > 0:
             condition_data[:, 6] = glue_conditions
             condition_data[:, 7] = flip_reset_conditions
+            condition_data[:, 8] = setup_conditions
         
+        has_setup = path_info["has_setup"]
         
-        # Override Ball Position to be the Start Point
-        state.ball.position = start_point.astype(np.float32)
-        
-        if len(path_points) > 0:
-            first_target = path_points[0]
-        else:
-            first_target = end_point
+        if has_setup:
+            # Setup path: ball and car start on ground
+            ball_spawn = path_info["ball_spawn"]
+            car_spawn = path_info["car_spawn"]
             
-        objective_direction = normalize(first_target - start_point)
-        objective_direction[2] = 0.0
-        
-        ball_vel_xy_noise_radius = 50
-        ball_vel_z_min = 150
-        ball_vel_z_max = 550
+            # Ball on ground with low velocity toward first target
+            state.ball.position = ball_spawn.astype(np.float32)
+            
+            if len(path_points) > 0:
+                first_target = path_points[0]
+            else:
+                first_target = end_point
+            
+            objective_direction = normalize(first_target - ball_spawn)
+            objective_direction[2] = 0.0  # Keep on ground
+            
+            # Ball starts stationary or with small velocity
+            ball_vel = objective_direction * random.uniform(0, 200)
+            ball_vel[2] = 0.0  # No vertical velocity on ground
+            state.ball.linear_velocity = ball_vel.astype(np.float32)
+            state.ball.angular_velocity = np.zeros(3, dtype=np.float32)
+            
+            # Position car at car spawn (on ground)
+            for car in state.cars.values():
+                car.physics.position = car_spawn.astype(np.float32)
+                
+                # Aim car toward the ball
+                to_ball = state.ball.position - car.physics.position
+                to_ball[2] = 0.0  # Keep horizontal
+                car.physics.euler_angles = dir_to_euler_yzx(to_ball)
+                
+                # Small initial velocity toward ball
+                car_vel = normalize(to_ball) * random.uniform(0, 300)
+                car_vel[2] = 0.0
+                car.physics.linear_velocity = car_vel.astype(np.float32)
+                car.physics.angular_velocity = np.zeros(3, dtype=np.float32)
+                
+                car.boost_amount = 100.0
+                car.on_ground = True
+                car.has_jumped = False
+                car.air_time_since_jump = 0.0
+        else:
+            # Aerial-only path (existing behavior)
+            # Override Ball Position to be the Start Point
+            state.ball.position = start_point.astype(np.float32)
+            
+            if len(path_points) > 0:
+                first_target = path_points[0]
+            else:
+                first_target = end_point
+                
+            objective_direction = normalize(first_target - start_point)
+            objective_direction[2] = 0.0
+            
+            ball_vel_xy_noise_radius = 50
+            ball_vel_z_min = 150
+            ball_vel_z_max = 550
 
+            ball_vel = np.array([
+                random.uniform(-ball_vel_xy_noise_radius, ball_vel_xy_noise_radius), 
+                random.uniform(-ball_vel_xy_noise_radius, ball_vel_xy_noise_radius), 
+                random.uniform(ball_vel_z_min, ball_vel_z_max)
+            ], dtype=np.float32)
+            state.ball.linear_velocity = ball_vel + objective_direction * random.uniform(150, 300)
+            state.ball.angular_velocity = np.zeros(3, dtype=np.float32)
+            
+            # Re-position cars for aerial start
+            FLOOR_MARGIN = 400
+            CEILING_MARGIN = 450
+            WALL_MARGIN = 100
 
-        ball_vel = np.array([
-            random.uniform(-ball_vel_xy_noise_radius, ball_vel_xy_noise_radius), 
-            random.uniform(-ball_vel_xy_noise_radius, ball_vel_xy_noise_radius), 
-            random.uniform(ball_vel_z_min, ball_vel_z_max)
-        ], dtype=np.float32)
-        state.ball.linear_velocity = ball_vel + objective_direction * random.uniform(150, 300)
-        state.ball.angular_velocity = np.zeros(3, dtype=np.float32)
+            spawn_min_x = -common_values.SIDE_WALL_X + WALL_MARGIN
+            spawn_max_x = common_values.SIDE_WALL_X - WALL_MARGIN
+            spawn_min_y = -common_values.BACK_WALL_Y + WALL_MARGIN
+            spawn_max_y = common_values.BACK_WALL_Y - WALL_MARGIN
+            spawn_min_z = FLOOR_MARGIN
+            spawn_max_z = common_values.CEILING_Z - CEILING_MARGIN
+            
+            car_min_height_under_ball = 100 
+            car_max_height_under_ball = 500
+            car_x_radius = 20
+            car_y_min = 20
+            car_y_max = 20
+            car_vel_noise_radius = 0
+            car_speed_min = 300
+            car_speed_max = 400
+            car_dir_noise_radius = 0
+            
+            ball_x, ball_y, ball_z = state.ball.position
+
+            for car in state.cars.values():
+                pos_x = ball_x + random.uniform(-car_x_radius, car_x_radius)
+                pos_y = ball_y + random.uniform(car_y_min, car_y_max)
+                pos_z = ball_z - random.uniform(car_min_height_under_ball, car_max_height_under_ball)
+
+                pos_x = max(spawn_min_x, min(pos_x, spawn_max_x))
+                pos_y = max(spawn_min_y, min(pos_y, spawn_max_y))
+                pos_z = max(spawn_min_z, min(pos_z, spawn_max_z))
+
+                car.physics.position = np.array([pos_x, pos_y, pos_z], dtype=np.float32)
+
+                to_ball = state.ball.position - car.physics.position + random.uniform(-car_vel_noise_radius, car_vel_noise_radius)
+                to_ball = to_ball / np.linalg.norm(to_ball)
+                car_vel = to_ball * random.uniform(car_speed_min, car_speed_max)
+
+                car.physics.linear_velocity = car_vel
+                car.physics.angular_velocity = np.zeros(3, dtype=np.float32)
+                to_ball = state.ball.position - car.physics.position 
+                car.physics.euler_angles = dir_to_euler_yzx(to_ball) + random.uniform(-car_dir_noise_radius, car_dir_noise_radius)
+                car.boost_amount = 100.0
+                car.air_time_since_jump = 2.0
+                car.has_jumped = True
         
         # Store path points in shared_info
         shared_info["path_points"] = path_points.astype(np.float32)
         shared_info["path_start"] = start_point.astype(np.float32)
         shared_info["path_end"] = end_point.astype(np.float32)
         shared_info["path_control"] = control_point.astype(np.float32)
+        shared_info["path_info"] = path_info
 
         shared_info["air_roll_rate"] = 0.0
         shared_info["air_roll_action"] = 0
@@ -181,64 +273,8 @@ class AirDribbleDirectedMutator(AirDribbleMutator):
         shared_info["num_ball_touches"] = 0
         shared_info["num_flip_resets"] = 0
         shared_info["reset_distance_to_goal"] = -1.0
-        
-        # Re-position cars based on the new ball position (Start Point)
-        # This reuses the logic from AirDribbleMutator but applies it to the new ball location
-        # We can largely copy the car positioning logic or call a helper if we refactored
-        # For now, let's just re-run the car positioning part locally to ensure it's relative to the NEW ball pos
-        
-        FLOOR_MARGIN = 400
-        CEILING_MARGIN = 450
-        WALL_MARGIN = 100
-
-
-        # Use safe ranges from path_generator
-        spawn_min_x = -common_values.SIDE_WALL_X + WALL_MARGIN
-        spawn_max_x = common_values.SIDE_WALL_X - WALL_MARGIN
-        spawn_min_y = -common_values.BACK_WALL_Y + WALL_MARGIN
-        spawn_max_y = common_values.BACK_WALL_Y - WALL_MARGIN
-        spawn_min_z = FLOOR_MARGIN
-        spawn_max_z = common_values.CEILING_Z - CEILING_MARGIN
-        
-        car_min_height_under_ball = 100 
-        car_max_height_under_ball = 500
-        car_x_radius = 20
-        car_y_min = 20
-        car_y_max = 20
-        car_vel_noise_radius = 0
-        car_speed_min = 300
-        car_speed_max = 400
-        car_dir_noise_radius = 0
-        
-        ball_x, ball_y, ball_z = state.ball.position
-
-        for car in state.cars.values():
-            pos_x = ball_x + random.uniform(-car_x_radius, car_x_radius)
-            pos_y = ball_y + random.uniform(car_y_min, car_y_max) # make car behind ball most of the time
-            pos_z = ball_z - random.uniform(car_min_height_under_ball, car_max_height_under_ball)
-
-            # clamp car pos to be within spawn limits
-            pos_x = max(spawn_min_x, min(pos_x, spawn_max_x))
-            pos_y = max(spawn_min_y, min(pos_y, spawn_max_y))
-            pos_z = max(spawn_min_z, min(pos_z, spawn_max_z))
-
-            car.physics.position = np.array([pos_x, pos_y, pos_z], dtype=np.float32)
-
-            to_ball = state.ball.position - car.physics.position + random.uniform(-car_vel_noise_radius, car_vel_noise_radius)
-            to_ball = to_ball / np.linalg.norm(to_ball)
-            ball_horizontal_vel = state.ball.linear_velocity.copy()
-            ball_horizontal_vel[2] = 0.0
-            car_vel = ball_horizontal_vel * random.uniform(car_speed_min, car_speed_max) + ball_horizontal_vel * random.uniform(0.4, 0.9)
-            car_vel = to_ball * random.uniform(car_speed_min, car_speed_max)
-
-            car.physics.linear_velocity = car_vel
-            car.physics.angular_velocity = np.zeros(3, dtype=np.float32)
-            # Aim car toward the ball
-            to_ball = state.ball.position - car.physics.position 
-            car.physics.euler_angles = dir_to_euler_yzx(to_ball) + random.uniform(-car_dir_noise_radius, car_dir_noise_radius)
-            car.boost_amount = 100.0
-            car.air_time_since_jump = 2.0 # start with no flip
-            car.has_jumped = True
+        shared_info["num_setup_targets_hit"] = 0
+        shared_info["num_air_targets_hit_after_setup"] = 0
 
         # Update target info for observation (if needed, though we have path_points now)
         shared_info["current_target_index"] = 0

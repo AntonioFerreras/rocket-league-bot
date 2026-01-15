@@ -100,6 +100,10 @@ def build_rlgym_v2_env(debug=False):
         BallToTargetReward,
         AirRollReward,
         FlipResetReward,
+        SetupJumpFlipPunishment,
+        SetupDribbleReward,
+        SetupBallSpeedPunishment,
+        SetupCompletionPunishment,
     )
     from mutators import AirDribbleMutator, AirDribbleDirectedMutator
 
@@ -140,19 +144,49 @@ def build_rlgym_v2_env(debug=False):
     class BallHitGroundTimeoutCondition(DoneCondition[AgentID, GameState]):
         """
         A DoneCondition that is satisfied a few seconds after the ball hits the ground.
+        Only starts ticking after leaving setup phase for a grace period.
         """
 
-        def __init__(self, timeout_seconds: float):
+        def __init__(self, timeout_seconds: float, post_setup_grace_seconds: float = 2.0):
             """
-            :param timeout_seconds: Timeout in seconds
+            :param timeout_seconds: Timeout in seconds after ball hits ground
+            :param post_setup_grace_seconds: Grace period after leaving setup before this condition activates
             """
             self.timeout_seconds = timeout_seconds
+            self.post_setup_grace_seconds = post_setup_grace_seconds
             self.last_hit_ground_tick = None
+            self.setup_left_tick = None
 
         def reset(self, agents: List[AgentID], initial_state: GameState, shared_info: Dict[str, Any]) -> None:
             self.last_hit_ground_tick = None
+            self.setup_left_tick = None
 
         def is_done(self, agents: List[AgentID], state: GameState, shared_info: Dict[str, Any]) -> Dict[AgentID, bool]:
+            from path_generator import SETUP_INDEX
+            
+            # Check if we're still in setup phase
+            condition_data = shared_info.get("condition_data")
+            current_idx = shared_info.get("current_target_index", 0)
+            
+            in_setup = False
+            if condition_data is not None and current_idx < len(condition_data):
+                in_setup = condition_data[current_idx, SETUP_INDEX] > 0.5
+            
+            # Track when we left setup
+            if in_setup:
+                self.setup_left_tick = None  # Still in setup, reset
+                return {agent: False for agent in agents}
+            else:
+                # Just left setup, record the tick
+                if self.setup_left_tick is None:
+                    self.setup_left_tick = state.tick_count
+            
+            # Check if grace period after leaving setup has passed
+            time_since_setup_left = (state.tick_count - self.setup_left_tick) / common_values.TICKS_PER_SECOND
+            if time_since_setup_left < self.post_setup_grace_seconds:
+                return {agent: False for agent in agents}
+            
+            # Now apply the ground timeout logic
             if state.ball.position[2] < BALL_RESTING_HEIGHT*1.5:
                 self.last_hit_ground_tick = state.tick_count
                 done = False
@@ -216,13 +250,17 @@ def build_rlgym_v2_env(debug=False):
     distance_player_to_ball_reward_weight = 0.5
     velocity_player_to_ball_reward_weight = 0.4*0.
     ball_to_goal_reward_weight = 1.5 * 0
-    forward_bias_reward_weight = 0.5*0
+    forward_bias_reward_weight = 0.5
     zone_reward_weight = 1.0
     ball_zone_reward_weight = 4.0
     boost_change_reward_weight = 0.5*0
     ball_to_target_reward_weight = 10.0
     air_roll_reward_weight = 5.0
     flip_reset_reward_weight = 25.0
+    setup_jump_flip_punishment_weight = 8.0  # Increased to make jumping during setup very costly
+    setup_dribble_reward_weight = 15.0  # Strong reward for actual dribbling
+    setup_ball_speed_punishment_weight = 5.0  # Punish hitting ball too hard
+    setup_completion_punishment_weight = 10.0  # NUCLEAR: massive punishment for not completing setup
 
     from rlgym.api import RewardFunction        
     
@@ -278,6 +316,10 @@ def build_rlgym_v2_env(debug=False):
         (BallToTargetReward(print_hits=debug), ball_to_target_reward_weight),
         (AirRollReward(), air_roll_reward_weight),
         (FlipResetReward(debug=debug), flip_reset_reward_weight),
+        (SetupJumpFlipPunishment(), setup_jump_flip_punishment_weight),
+        (SetupDribbleReward(), setup_dribble_reward_weight),
+        (SetupBallSpeedPunishment(), setup_ball_speed_punishment_weight),
+        (SetupCompletionPunishment(), setup_completion_punishment_weight),
     )
 
     class FreestyleObs(DefaultObs):
@@ -467,6 +509,8 @@ if __name__ == "__main__":
                     "num_ball_touches": PyAnySerdeType.INT(),
                     "num_flip_resets": PyAnySerdeType.INT(),
                     "reset_distance_to_goal": PyAnySerdeType.FLOAT(),
+                    "num_setup_targets_hit": PyAnySerdeType.INT(),
+                    "num_air_targets_hit_after_setup": PyAnySerdeType.INT(),
                 }),
             ),
             timestep_limit=60_000_000_000,  # Train for 60B steps

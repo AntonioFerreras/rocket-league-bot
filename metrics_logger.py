@@ -48,6 +48,10 @@ class PPOMetricsLogger(
 
         avg_num_targets_hit = np.mean([shared_info.get("current_target_index", 0) if shared_info is not None else 0.0 for shared_info in data])
         max_num_targets_hit = np.max([shared_info.get("current_target_index", 0) if shared_info is not None else 0.0 for shared_info in data])
+        avg_num_setup_targets_hit = np.mean([shared_info.get("num_setup_targets_hit", 0) if shared_info is not None else 0.0 for shared_info in data])
+        max_num_setup_targets_hit = np.max([shared_info.get("num_setup_targets_hit", 0) if shared_info is not None else 0.0 for shared_info in data])
+        avg_num_air_targets_hit_after_setup = np.mean([shared_info.get("num_air_targets_hit_after_setup", 0) if shared_info is not None else 0.0 for shared_info in data])
+        max_num_air_targets_hit_after_setup = np.max([shared_info.get("num_air_targets_hit_after_setup", 0) if shared_info is not None else 0.0 for shared_info in data])
 
         raw_hit_accel_dir_z = [shared_info.get("hit_accel_dir_z", -1.0) if shared_info is not None else -1.0 for shared_info in data]
         filtered_hit_accel_dir_z = [x for x in raw_hit_accel_dir_z if x > -0.1]
@@ -68,12 +72,15 @@ class PPOMetricsLogger(
                 "Average distance to target": avg_target_dist,
                 "Average number of targets hit": avg_num_targets_hit,
                 "Max number of targets hit": max_num_targets_hit,
+                "Average number of setup targets hit": avg_num_setup_targets_hit,
                 "Average air roll rate": avg_air_roll_rate,
                 "Average hit acceleration direction z": avg_hit_accel_dir_z,
                 "Average number of ball touches": avg_num_ball_touches,
                 "Max number of flip resets": max_num_flip_resets,
                 "Avg number of flip resets": avg_num_flip_resets,
                 "Average reset distance": avg_reset_dist,
+                "Average number of air targets hit after setup": avg_num_air_targets_hit_after_setup,
+                "Max number of air targets hit after setup": max_num_air_targets_hit_after_setup,
             }
         }
 
