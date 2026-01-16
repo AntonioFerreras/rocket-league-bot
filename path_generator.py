@@ -399,9 +399,10 @@ def generate_aerial_path_from_wall(start_point, end_point, wall_side, step_dista
     cp_x = max(-max_x, min(max_x, cp_x))
     
     # Control point Z: very high for strong verticality (biased heavily toward ceiling)
-    min_z = max(start_z + 800, 1400)  # At least 800 above start or 1400
-    max_z = CEILING_Z - 100  # Allow very close to ceiling
-    cp_z = random.uniform(min_z, max_z)
+    # For setup paths, we need extra height to create a proper vertical launch from wall
+    # min_z = max(start_z + 1000, 1700)  # At least 1000 above start or 1700 minimum
+    # max_z = CEILING_Z + 500  # Allow very close to ceiling
+    cp_z = random.uniform(2300, 3000)
     
     raw_control_point = np.array([cp_x, cp_y, cp_z])
     
@@ -434,7 +435,7 @@ def generate_aerial_path_from_wall(start_point, end_point, wall_side, step_dista
     
     return path_points, raw_control_point
 
-def generate_random_path(step_distance=1000, setup_step_distance=1000):
+def generate_random_path(step_distance=1000, setup_step_distance=1000, has_setup_probability=0.5, flip_reset_probability=0.7):
     """
     Generates a path from a random point to a goal.
     30% chance: Setup path (ground -> wall -> aerial)
@@ -451,7 +452,7 @@ def generate_random_path(step_distance=1000, setup_step_distance=1000):
     """
     end_point = get_random_point_in_goal()
     
-    has_setup = random.random() < 0.5
+    has_setup = random.random() < has_setup_probability
     path_info = {
         "has_setup": has_setup,
         "ball_spawn": None,
@@ -538,7 +539,7 @@ def generate_random_path(step_distance=1000, setup_step_distance=1000):
     if num_aerial_points > 0:
         non_glue_indices = (glue_conditions == 0.0) & (setup_conditions == 0.0)
         if np.any(non_glue_indices):
-            if random.random() < 0.7:
+            if random.random() < flip_reset_probability:
                 flip_reset_conditions[non_glue_indices] = 1.0
                 # First aerial point can't have flip reset
                 if aerial_start_idx < num_path_points:
