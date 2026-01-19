@@ -624,11 +624,12 @@ class AirRollReward(RewardFunction[AgentID, GameState, float]):
         # return rol_is_aligned
 
 class FlipResetReward(RewardFunction[AgentID, GameState, float]):
-    def __init__(self, debug: bool = False, obtain_flip_weight: float = 6.0, hit_ball_weight: float = 0.0, down_facing_ball_weight: float = 0.8):
+    def __init__(self, debug: bool = False, obtain_flip_weight: float = 6.0, hit_ball_weight: float = 0.0, down_facing_ball_weight: float = 0.8, target_hit_timeout: float = 1.5):
         self.debug = debug
         self.obtain_flip_weight = obtain_flip_weight
         self.hit_ball_weight = hit_ball_weight
         self.down_facing_ball_weight = down_facing_ball_weight
+        self.target_hit_timeout = target_hit_timeout
         self.last_target_hit_tick = None
 
         self.prev_state = None
@@ -660,7 +661,7 @@ class FlipResetReward(RewardFunction[AgentID, GameState, float]):
         if condition_data[FLIP_RESET_INDEX] < 0.5:
             return rewards
 
-        if (state.tick_count - self.last_target_hit_tick) / TICKS_PER_SECOND > 1.5:
+        if (state.tick_count - self.last_target_hit_tick) / TICKS_PER_SECOND > self.target_hit_timeout:
             return rewards
         
 
@@ -673,8 +674,9 @@ class FlipResetReward(RewardFunction[AgentID, GameState, float]):
             cossim_down_ball = max(0, cosine_similarity(down, car_ball))
             distance_to_goal = np.linalg.norm(state.cars[agent].physics.position - shared_info["path_points"][-1])
             distance_scale = min(1.0 + 1.5*max(0.0, distance_to_goal - 2300.0)/2300.0, 4.0)
+            pointing_in_motion_direction = np.dot(normalize(state.cars[agent].physics.forward[:2]), normalize(state.cars[agent].physics.linear_velocity[:2])) > 0.766044443
             if car.ball_touches > 0 and car.has_flip and not self.prev_state.cars[agent].has_flip:
-                if cossim_down_ball > 0.5 ** 0.5:  # 45 degrees
+                if cossim_down_ball > 0.5 ** 0.5 - 0.2:  # 45 degrees
                     self.has_reset.add(agent)
                     rewards[agent] = 0.0
                     
@@ -684,10 +686,11 @@ class FlipResetReward(RewardFunction[AgentID, GameState, float]):
                     
                     multi_scale = 2.0 if shared_info["num_flip_resets"] > 1 else 1.0
                     first_reset_ball_vel_scale = 0.5 + (min(200, max(-600, self.prev_state.ball.linear_velocity[2])) + 600) * (1.0 / 800)
+                    pointing_in_motion_direction_scale = (0.5 if (not pointing_in_motion_direction and shared_info["num_flip_resets"] == 1) else 1.0)
                     if shared_info["num_flip_resets"] > 0:
                         first_reset_ball_vel_scale = 1.0
                     if state.cars[agent].physics.position[2] > 80.0:
-                        rewards[agent] += self.obtain_flip_weight*distance_scale*multi_scale*first_reset_ball_vel_scale
+                        rewards[agent] += self.obtain_flip_weight*distance_scale*multi_scale*first_reset_ball_vel_scale#*pointing_in_motion_direction_scale
 
                     if self.debug:
                         print(f"Flip reset {shared_info["num_flip_resets"]} distance to goal {shared_info["reset_distance_to_goal"]}")
@@ -716,8 +719,8 @@ class FlipResetReward(RewardFunction[AgentID, GameState, float]):
 
             # if prev_dist_to_ball > curr_dist_to_ball:
             if curr_dist_to_ball < 100 and self.down_facing_juice > 0.0 and decrease_rate > 7.0:
-                pointing_in_motion_direction = np.dot(normalize(state.cars[agent].physics.forward[:2]), normalize(state.cars[agent].physics.linear_velocity[:2])) > 0.766044443
-                close_reward = self.down_facing_ball_weight * (cossim_down_ball*2.0 - 1.0) * (0.5 if (not pointing_in_motion_direction and shared_info["num_flip_resets"] == 0) else 1.0)
+                
+                close_reward = self.down_facing_ball_weight * (cossim_down_ball*2.0 - 1.0) # * (0.5 if (not pointing_in_motion_direction and shared_info["num_flip_resets"] == 0) else 1.0)
                 if decrease_rate > 30.0 and close_reward > 0.0:
                     close_reward *= 2.0
                     

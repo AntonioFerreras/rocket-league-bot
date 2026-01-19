@@ -31,8 +31,8 @@ def load_path_data(path_file):
     
     path_info = {
         "has_setup": bool(data["has_setup"][0]) if len(data["has_setup"]) > 0 else False,
-        "ball_spawn": data["ball_spawn"] if len(data["ball_spawn"]) > 0 else None,
-        "car_spawn": data["car_spawn"] if len(data["car_spawn"]) > 0 else None,
+        "ball_spawn": data["ball_spawn"].copy() if len(data["ball_spawn"]) > 0 else None,
+        "car_spawn": data["car_spawn"].copy() if len(data["car_spawn"]) > 0 else None,
         "num_setup_points": int(data["num_setup_points"][0]) if len(data["num_setup_points"]) > 0 else 0,
     }
     
@@ -40,26 +40,33 @@ def load_path_data(path_file):
     initial_state = None
     if "ball_position" in data:
         initial_state = {
-            "ball_position": data["ball_position"],
-            "ball_linear_velocity": data["ball_linear_velocity"],
-            "ball_angular_velocity": data["ball_angular_velocity"],
-            "car_position": data["car_position"],
-            "car_linear_velocity": data["car_linear_velocity"],
-            "car_angular_velocity": data["car_angular_velocity"],
-            "car_euler_angles": data["car_euler_angles"],
+            "ball_position": data["ball_position"].copy(),
+            "ball_linear_velocity": data["ball_linear_velocity"].copy(),
+            "ball_angular_velocity": data["ball_angular_velocity"].copy(),
+            "car_position": data["car_position"].copy(),
+            "car_linear_velocity": data["car_linear_velocity"].copy(),
+            "car_angular_velocity": data["car_angular_velocity"].copy(),
+            "car_euler_angles": data["car_euler_angles"].copy(),
             "car_boost_amount": float(data["car_boost_amount"][0]),
             "car_on_ground": bool(data["car_on_ground"][0]),
             "car_has_jumped": bool(data["car_has_jumped"][0]),
+            "car_air_time_since_jump": float(data["car_air_time_since_jump"][0]) if "car_air_time_since_jump" in data else (0.0 if not bool(data["car_has_jumped"][0]) else 2.0),
         }
     
+    # Load expected flip reset count if available
+    expected_flip_resets = None
+    if "expected_flip_resets" in data:
+        expected_flip_resets = int(data["expected_flip_resets"][0])
+    
     return {
-        "path_points": data["path_points"],
-        "path_start": data["path_start"],
-        "path_end": data["path_end"],
-        "path_control": data["path_control"],
-        "condition_data": data["condition_data"],
+        "path_points": data["path_points"].copy(),
+        "path_start": data["path_start"].copy(),
+        "path_end": data["path_end"].copy(),
+        "path_control": data["path_control"].copy(),
+        "condition_data": data["condition_data"].copy(),
         "path_info": path_info,
         "initial_state": initial_state,
+        "expected_flip_resets": expected_flip_resets,
     }
 
 
@@ -246,7 +253,7 @@ def build_replay_env(path_data):
                     car.boost_amount = initial_state["car_boost_amount"]
                     car.on_ground = initial_state["car_on_ground"]
                     car.has_jumped = initial_state["car_has_jumped"]
-                    car.air_time_since_jump = 0.0 if not initial_state["car_has_jumped"] else 2.0
+                    car.air_time_since_jump = initial_state["car_air_time_since_jump"]
             else:
                 # Fallback: use path_info to set up state (less accurate)
                 has_setup = path_info["has_setup"]
@@ -350,7 +357,7 @@ def build_replay_env(path_data):
 
     class EvalReward(RewardFunction[AgentID, GameState, float]):
         def __init__(self):
-            self.flip_reset_reward = FlipResetReward(debug=True)  # Debug mode for replay
+            self.flip_reset_reward = FlipResetReward(debug=True, target_hit_timeout=10.0)  # Debug mode for replay
             self.ball_to_target_reward = BallToTargetReward(print_hits=True)
         
         def reset(self, agents: List[AgentID], initial_state: GameState, shared_info: Dict[str, Any]) -> None:
@@ -424,6 +431,9 @@ def main():
     print(f"  Path has {len(path_data['path_points'])} points")
     print(f"  Has setup: {path_data['path_info']['has_setup']}")
     print(f"  Has exact initial state: {path_data['initial_state'] is not None}")
+    expected_flip_resets = path_data.get("expected_flip_resets")
+    if expected_flip_resets is not None:
+        print(f"  Expected flip resets: {expected_flip_resets}")
     
     # Build environment
     env = build_replay_env(path_data)
@@ -493,8 +503,16 @@ def main():
             
             # Print episode stats
             shared_info = env.shared_info
+            actual_flip_resets = shared_info.get('num_flip_resets', 0)
             print(f"  Steps: {step_count}")
-            print(f"  Flip resets: {shared_info.get('num_flip_resets', 0)}")
+            print(f"  Flip resets: {actual_flip_resets}", end="")
+            if expected_flip_resets is not None:
+                if actual_flip_resets == expected_flip_resets:
+                    print(f" (matches expected: {expected_flip_resets}) ✓")
+                else:
+                    print(f" (MISMATCH! expected: {expected_flip_resets}) ✗")
+            else:
+                print()
             print(f"  Ball touches: {shared_info.get('num_ball_touches', 0)}")
             print()
             

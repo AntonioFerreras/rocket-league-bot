@@ -1,16 +1,20 @@
 """
-Evaluation script to find the path with the most flip resets.
+Multiprocess evaluation script to find the path with the most flip resets.
 Uses 100% setup and flip reset probability paths with deterministic policy.
+Runs multiple environments in parallel for faster evaluation.
 """
 import os
 os.environ["OPENBLAS_NUM_THREADS"] = "1"
 
 import argparse
 import random
-import json
-from typing import Dict, Any, List, Tuple
+import time
+from typing import Dict, Any, List, Tuple, Optional
 import numpy as np
 import torch
+import multiprocessing as mp
+from multiprocessing import Queue, Process
+from dataclasses import dataclass
 from tqdm import tqdm
 
 # Config
@@ -26,9 +30,23 @@ ball_hit_ground_timeout_seconds = 2
 game_timeout_seconds = 100
 
 
+@dataclass
+class EpisodeResult:
+    """Result from a single episode evaluation."""
+    num_flip_resets: int
+    scored_goal: bool
+    clean_aerial: bool
+    num_ball_touches: int
+    num_setup_targets_hit: int
+    num_air_targets_hit_after_setup: int
+    # Path data for saving (only populated if this is a candidate for best)
+    path_data: Optional[Dict] = None
+    initial_state: Optional[Dict] = None
+
+
 def build_eval_env(has_setup_probability=1.0, flip_reset_probability=1.0):
     """Build environment with custom setup/flip_reset probabilities."""
-    from rlgym.rocket_league.common_values import BALL_RESTING_HEIGHT, BLUE_TEAM
+    from rlgym.rocket_league.common_values import BALL_RESTING_HEIGHT
     from rlgym.api import RLGym, StateMutator, DoneCondition, AgentID
     from rlgym.rocket_league.api import GameState
     from rlgym.rocket_league import common_values
@@ -39,7 +57,6 @@ def build_eval_env(has_setup_probability=1.0, flip_reset_probability=1.0):
         TimeoutCondition,
     )
     from rlgym.rocket_league.obs_builders import DefaultObs
-    from rlgym.rocket_league.reward_functions import CombinedReward
     from rlgym.rocket_league.sim import RocketSimEngine
     from rlgym.rocket_league.state_mutators import (
         FixedTeamSizeMutator,
@@ -139,7 +156,6 @@ def build_eval_env(has_setup_probability=1.0, flip_reset_probability=1.0):
                 repeat_actions[agent] = action.repeat(self.repeats, axis=0)
             return repeat_actions
 
-    # Custom mutator that accepts probabilities as parameters
     class EvalAirDribbleDirectedMutator(StateMutator[GameState]):
         def __init__(self, num_conditions: int, has_setup_probability: float, flip_reset_probability: float):
             self.num_conditions = num_conditions
@@ -149,7 +165,6 @@ def build_eval_env(has_setup_probability=1.0, flip_reset_probability=1.0):
         def apply(self, state: GameState, shared_info: Dict[str, Any]) -> None:
             state.config.boost_consumption = 0.001
             
-            # Generate path with custom probabilities
             path_points, start_point, end_point, control_point, glue_conditions, flip_reset_conditions, setup_conditions, path_info = generate_random_path(
                 step_distance=1000,
                 has_setup_probability=self.has_setup_probability,
@@ -255,7 +270,6 @@ def build_eval_env(has_setup_probability=1.0, flip_reset_probability=1.0):
                     car.air_time_since_jump = 2.0
                     car.has_jumped = True
             
-            # Store path info in shared_info for tracking
             shared_info["path_points"] = path_points.astype(np.float32)
             shared_info["path_start"] = start_point.astype(np.float32)
             shared_info["path_end"] = end_point.astype(np.float32)
@@ -309,13 +323,12 @@ def build_eval_env(has_setup_probability=1.0, flip_reset_probability=1.0):
             obs = np.concatenate([obs, current_conditions[6:]])
             return obs
 
-    # Simple reward function (we don't need rewards for eval, but need something)
     from rlgym.api import RewardFunction
     from rewards import FlipResetReward, BallToTargetReward
 
     class EvalReward(RewardFunction[AgentID, GameState, float]):
         def __init__(self):
-            self.flip_reset_reward = FlipResetReward(debug=False)
+            self.flip_reset_reward = FlipResetReward(debug=False, target_hit_timeout=10.0)
             self.ball_to_target_reward = BallToTargetReward(print_hits=False)
         
         def reset(self, agents: List[AgentID], initial_state: GameState, shared_info: Dict[str, Any]) -> None:
@@ -323,7 +336,6 @@ def build_eval_env(has_setup_probability=1.0, flip_reset_probability=1.0):
             self.ball_to_target_reward.reset(agents, initial_state, shared_info)
 
         def get_rewards(self, agents: List[AgentID], state: GameState, is_terminated, is_truncated, shared_info: Dict[str, Any]):
-            # We need the flip reset reward to update shared_info["num_flip_resets"]
             self.flip_reset_reward.get_rewards(agents, state, is_terminated, is_truncated, shared_info)
             self.ball_to_target_reward.get_rewards(agents, state, is_terminated, is_truncated, shared_info)
             return {agent: 0.0 for agent in agents}
@@ -371,72 +383,28 @@ def build_eval_env(has_setup_probability=1.0, flip_reset_probability=1.0):
     )
 
 
-def save_best_path(path_info_dict, shared_info, initial_state, output_path="best_path.npz"):
-    """Save the best path data to a file, including initial physics state."""
-    # Extract path_info dict (contains has_setup, ball_spawn, car_spawn, etc.)
-    path_info = shared_info.get("path_info", {})
-    
-    np.savez(
-        output_path,
-        path_points=path_info_dict["path_points"],
-        path_start=path_info_dict["path_start"],
-        path_end=path_info_dict["path_end"],
-        path_control=path_info_dict["path_control"],
-        condition_data=path_info_dict["condition_data"],
-        # Save path_info fields
-        has_setup=np.array([path_info.get("has_setup", False)]),
-        ball_spawn=path_info.get("ball_spawn") if path_info.get("ball_spawn") is not None else np.array([]),
-        car_spawn=path_info.get("car_spawn") if path_info.get("car_spawn") is not None else np.array([]),
-        num_setup_points=np.array([path_info.get("num_setup_points", 0)]),
-        # Save initial physics state for exact replay
-        ball_position=initial_state["ball_position"],
-        ball_linear_velocity=initial_state["ball_linear_velocity"],
-        ball_angular_velocity=initial_state["ball_angular_velocity"],
-        car_position=initial_state["car_position"],
-        car_linear_velocity=initial_state["car_linear_velocity"],
-        car_angular_velocity=initial_state["car_angular_velocity"],
-        car_euler_angles=initial_state["car_euler_angles"],
-        car_boost_amount=initial_state["car_boost_amount"],
-        car_on_ground=initial_state["car_on_ground"],
-        car_has_jumped=initial_state["car_has_jumped"],
-    )
-    print(f"  Saved best path to: {output_path}")
-
-
-def main():
-    parser = argparse.ArgumentParser(description="Evaluate flip reset performance")
-    parser.add_argument("--checkpoint", type=str, required=True, 
-                        help="Path to checkpoint folder containing ppo_learner/actor.pt")
-    parser.add_argument("--num_episodes", type=int, default=10000,
-                        help="Number of episodes to run")
-    parser.add_argument("--seed", type=int, default=42,
-                        help="Random seed")
-    parser.add_argument("--output", type=str, default="best_path.npz",
-                        help="Output file for best path data")
-    args = parser.parse_args()
-
-    # Set random seeds
-    random.seed(args.seed)
-    np.random.seed(args.seed)
-    torch.manual_seed(args.seed)
-
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    print(f"Using device: {device}")
-
-    # Build environment with 100% setup and flip reset probability
-    env = build_eval_env(has_setup_probability=1.0, flip_reset_probability=1.0)
-    
-    # Load actor model
+def worker_process(worker_id: int, checkpoint_path: str, num_episodes: int, 
+                   result_queue: Queue, seed: int, min_flip_resets_to_save: int = 0):
+    """Worker process that runs episodes and sends results back."""
+    from path_generator import SETUP_INDEX
+    from rlgym.rocket_league.common_values import BALL_RESTING_HEIGHT
     from models import DiscreteFF
     
-    # Get obs/action space from environment
+    # Set unique seed for this worker
+    worker_seed = seed + worker_id * 10000
+    random.seed(worker_seed)
+    np.random.seed(worker_seed)
+    torch.manual_seed(worker_seed)
+    
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    
+    # Build environment
+    env = build_eval_env(has_setup_probability=1.0, flip_reset_probability=1.0)
+    
+    # Load actor
     obs_space = env.observation_space("blue-0")
     action_space = env.action_space("blue-0")
     
-    print(f"Obs space: {obs_space}")
-    print(f"Action space: {action_space}")
-    
-    # Create actor with same architecture as training
     dim = 512
     num_layers = 4
     actor = DiscreteFF(
@@ -447,34 +415,23 @@ def main():
         dtype=torch.float32
     )
     
-    # Load checkpoint weights
-    actor_path = os.path.join(args.checkpoint, "ppo_learner", "actor.pt")
-    print(f"Loading actor from: {actor_path}")
-    actor.load_state_dict(torch.load(actor_path, map_location=device))
+    actor_path = os.path.join(checkpoint_path, "ppo_learner", "actor.pt")
+    actor.load_state_dict(torch.load(actor_path, map_location=device, weights_only=True))
     actor.eval()
-
-    # Tracking variables
-    best_flip_resets = 0
-    best_episode_info = None
-    flip_reset_counts = []
-    goals_scored = 0
-    clean_goals = 0  # Goals where ball didn't touch ground after setup
     
-    print(f"\nRunning {args.num_episodes} episodes with deterministic policy...")
-    print("All paths have 100% setup and 100% flip reset probability")
-    print("Only paths that end in GOAL + CLEAN AERIAL (no ground touch) will be saved as best\n")
+    MIN_AIRBORNE_HEIGHT = 400
+    GROUND_THRESHOLD = BALL_RESTING_HEIGHT * 1.5
     
-    for episode in tqdm(range(args.num_episodes), desc="Evaluating"):
+    for ep in range(num_episodes):
         obs_dict = env.reset()
         done = False
         
-        # Access shared_info directly from env (it's a public attribute)
+        # Capture initial state
         shared_info = env.shared_info
-        
-        # Capture the initial physics state for exact replay
         state = env.state
-        car = list(state.cars.values())[0]  # Get first car
-        episode_initial_state = {
+        car = list(state.cars.values())[0]
+        
+        initial_state_data = {
             "ball_position": state.ball.position.copy(),
             "ball_linear_velocity": state.ball.linear_velocity.copy(),
             "ball_angular_velocity": state.ball.angular_velocity.copy(),
@@ -485,46 +442,43 @@ def main():
             "car_boost_amount": np.array([car.boost_amount]),
             "car_on_ground": np.array([car.on_ground]),
             "car_has_jumped": np.array([car.has_jumped]),
+            "car_air_time_since_jump": np.array([car.air_time_since_jump]),
         }
         
-        # Store initial path info for this episode (copy arrays to avoid mutation)
-        episode_path_info = {
+        # Deep copy path_info to avoid reference issues with numpy arrays
+        raw_path_info = shared_info.get("path_info", {})
+        path_info_copy = {
+            "has_setup": raw_path_info.get("has_setup", False),
+            "ball_spawn": raw_path_info.get("ball_spawn").copy() if raw_path_info.get("ball_spawn") is not None else None,
+            "car_spawn": raw_path_info.get("car_spawn").copy() if raw_path_info.get("car_spawn") is not None else None,
+            "num_setup_points": raw_path_info.get("num_setup_points", 0),
+        }
+        
+        path_data = {
             "path_points": shared_info.get("path_points", None).copy() if shared_info.get("path_points") is not None else None,
             "path_start": shared_info.get("path_start", None).copy() if shared_info.get("path_start") is not None else None,
             "path_end": shared_info.get("path_end", None).copy() if shared_info.get("path_end") is not None else None,
             "path_control": shared_info.get("path_control", None).copy() if shared_info.get("path_control") is not None else None,
             "condition_data": shared_info.get("condition_data", None).copy() if shared_info.get("condition_data") is not None else None,
-        }
-        # Also capture path_info dict for setup info
-        episode_shared_info_snapshot = {
-            "path_info": shared_info.get("path_info", {}).copy() if shared_info.get("path_info") else {},
+            "path_info": path_info_copy,
         }
         
-        # Track if ball hits ground after setup
-        from path_generator import SETUP_INDEX
-        from rlgym.rocket_league.common_values import BALL_RESTING_HEIGHT
+        # Track clean aerial
         ball_hit_ground_after_setup = False
         left_setup_phase = False
-        ball_was_airborne = False  # Track if ball has been in the air after setup
-        MIN_AIRBORNE_HEIGHT = 400  # Ball must reach this height to count as "airborne"
-        GROUND_THRESHOLD = BALL_RESTING_HEIGHT * 1.5
+        ball_was_airborne = False
         
         while not done:
-            # Get observations for all agents
             agent_ids = list(obs_dict.keys())
             obs_list = [obs_dict[agent_id] for agent_id in agent_ids]
             
-            # Get deterministic action
             with torch.no_grad():
                 actions, _ = actor.get_action(agent_ids, obs_list, deterministic=True)
             
-            # Create action dict - each action must be a numpy array with shape (1,)
             action_dict = {agent_id: np.array([actions[i]]) for i, agent_id in enumerate(agent_ids)}
-            
-            # Step environment (returns 4 values: obs, rewards, terminated, truncated)
             obs_dict, rewards, terminated, truncated = env.step(action_dict)
             
-            # Check if we've left the setup phase
+            # Track setup phase and ball height
             shared_info = env.shared_info
             condition_data = shared_info.get("condition_data")
             current_idx = shared_info.get("current_target_index", 0)
@@ -535,81 +489,182 @@ def main():
             if not in_setup:
                 left_setup_phase = True
             
-            # Track ball height after leaving setup
             if left_setup_phase:
                 ball_z = env.state.ball.position[2]
-                
-                # First, wait for ball to get airborne (reach a reasonable height)
                 if not ball_was_airborne:
                     if ball_z > MIN_AIRBORNE_HEIGHT:
                         ball_was_airborne = True
                 else:
-                    # Ball was airborne, now check if it comes back down to ground
                     if ball_z < GROUND_THRESHOLD:
                         ball_hit_ground_after_setup = True
             
-            # Check if done
             done = any(terminated.values()) or any(truncated.values())
         
-        # Get flip reset count from shared_info (updated during step via reward fn)
+        # Collect result
         num_flip_resets = shared_info.get("num_flip_resets", 0)
-        flip_reset_counts.append(num_flip_resets)
-        
-        # Check if episode ended with a goal (terminated) vs timeout (truncated)
         scored_goal = any(terminated.values())
-        if scored_goal:
+        clean_aerial = not ball_hit_ground_after_setup
+        
+        # Only include path data if this is a good candidate
+        include_path_data = (scored_goal and clean_aerial and num_flip_resets >= min_flip_resets_to_save)
+        
+        result = EpisodeResult(
+            num_flip_resets=num_flip_resets,
+            scored_goal=scored_goal,
+            clean_aerial=clean_aerial,
+            num_ball_touches=shared_info.get("num_ball_touches", 0),
+            num_setup_targets_hit=shared_info.get("num_setup_targets_hit", 0),
+            num_air_targets_hit_after_setup=shared_info.get("num_air_targets_hit_after_setup", 0),
+            path_data=path_data if include_path_data else None,
+            initial_state=initial_state_data if include_path_data else None,
+        )
+        
+        result_queue.put((worker_id, result))
+    
+    env.close()
+    result_queue.put((worker_id, None))  # Signal worker is done
+
+
+def save_best_path(path_data: Dict, initial_state: Dict, num_flip_resets: int, output_path: str):
+    """Save the best path data to a file."""
+    path_info = path_data.get("path_info", {})
+    
+    np.savez(
+        output_path,
+        path_points=path_data["path_points"],
+        path_start=path_data["path_start"],
+        path_end=path_data["path_end"],
+        path_control=path_data["path_control"],
+        condition_data=path_data["condition_data"],
+        has_setup=np.array([path_info.get("has_setup", False)]),
+        ball_spawn=path_info.get("ball_spawn") if path_info.get("ball_spawn") is not None else np.array([]),
+        car_spawn=path_info.get("car_spawn") if path_info.get("car_spawn") is not None else np.array([]),
+        num_setup_points=np.array([path_info.get("num_setup_points", 0)]),
+        expected_flip_resets=np.array([num_flip_resets]),  # Save for verification during replay
+        ball_position=initial_state["ball_position"],
+        ball_linear_velocity=initial_state["ball_linear_velocity"],
+        ball_angular_velocity=initial_state["ball_angular_velocity"],
+        car_position=initial_state["car_position"],
+        car_linear_velocity=initial_state["car_linear_velocity"],
+        car_angular_velocity=initial_state["car_angular_velocity"],
+        car_euler_angles=initial_state["car_euler_angles"],
+        car_boost_amount=initial_state["car_boost_amount"],
+        car_on_ground=initial_state["car_on_ground"],
+        car_has_jumped=initial_state["car_has_jumped"],
+        car_air_time_since_jump=initial_state["car_air_time_since_jump"],
+    )
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Multiprocess evaluation for flip resets")
+    parser.add_argument("--checkpoint", type=str, required=True,
+                        help="Path to checkpoint folder containing ppo_learner/actor.pt")
+    parser.add_argument("--num_episodes", type=int, default=10000,
+                        help="Total number of episodes to run")
+    parser.add_argument("--num_workers", type=int, default=16,
+                        help="Number of parallel worker processes")
+    parser.add_argument("--seed", type=int, default=None,
+                        help="Random seed (default: random based on current time)")
+    parser.add_argument("--output", type=str, default="best_path.npz",
+                        help="Output file for best path data")
+    args = parser.parse_args()
+    
+    # Use time-based seed if not specified
+    if args.seed is None:
+        args.seed = int(time.time() * 1000) % (2**32)
+    print(f"Using seed: {args.seed}")
+    
+    print(f"Starting multiprocess evaluation with {args.num_workers} workers")
+    print(f"Total episodes: {args.num_episodes}")
+    print(f"Checkpoint: {args.checkpoint}")
+    print(f"Only paths that end in GOAL + CLEAN AERIAL will be saved as best\n")
+    
+    # Distribute episodes across workers
+    episodes_per_worker = args.num_episodes // args.num_workers
+    remainder = args.num_episodes % args.num_workers
+    
+    # Create result queue
+    result_queue = mp.Queue()
+    
+    # Start workers
+    workers = []
+    for i in range(args.num_workers):
+        num_eps = episodes_per_worker + (1 if i < remainder else 0)
+        p = Process(target=worker_process, args=(
+            i, args.checkpoint, num_eps, result_queue, args.seed, 0
+        ))
+        p.start()
+        workers.append(p)
+    
+    # Collect results
+    best_flip_resets = 0
+    best_result = None
+    flip_reset_counts = []
+    goals_scored = 0
+    clean_goals = 0
+    workers_done = 0
+    
+    pbar = tqdm(total=args.num_episodes, desc="Evaluating")
+    
+    while workers_done < args.num_workers:
+        worker_id, result = result_queue.get()
+        
+        if result is None:
+            workers_done += 1
+            continue
+        
+        pbar.update(1)
+        flip_reset_counts.append(result.num_flip_resets)
+        
+        if result.scored_goal:
             goals_scored += 1
         
-        # Track clean aerial (no ground touch after setup)
-        clean_aerial = not ball_hit_ground_after_setup
-        if scored_goal and clean_aerial:
+        if result.scored_goal and result.clean_aerial:
             clean_goals += 1
-        
-        # Track best episode - only consider episodes that scored a goal AND ball didn't hit ground after setup
-        if scored_goal and clean_aerial and num_flip_resets > best_flip_resets:
-            best_flip_resets = num_flip_resets
-            best_episode_info = {
-                "episode": episode,
-                "num_flip_resets": num_flip_resets,
-                "num_ball_touches": shared_info.get("num_ball_touches", 0),
-                "num_setup_targets_hit": shared_info.get("num_setup_targets_hit", 0),
-                "num_air_targets_hit_after_setup": shared_info.get("num_air_targets_hit_after_setup", 0),
-                "path_info": episode_path_info,
-                "scored_goal": True,
-                "clean_aerial": True,
-            }
-            print(f"\n[Episode {episode}] New best: {num_flip_resets} flip resets (GOAL + CLEAN AERIAL)!")
-            # Save the best path to file (use the snapshot from episode start)
-            save_best_path(episode_path_info, episode_shared_info_snapshot, episode_initial_state, args.output)
-
-    env.close()
-
+            
+            # Check if this is best
+            if result.num_flip_resets > best_flip_resets:
+                best_flip_resets = result.num_flip_resets
+                best_result = result
+                tqdm.write(f"[Worker {worker_id}] New best: {result.num_flip_resets} flip resets (GOAL + CLEAN AERIAL)!")
+                
+                # Save immediately
+                if result.path_data is not None and result.initial_state is not None:
+                    save_best_path(result.path_data, result.initial_state, result.num_flip_resets, args.output)
+                    tqdm.write(f"  Saved best path to: {args.output}")
+    
+    pbar.close()
+    
+    # Wait for all workers to finish
+    for p in workers:
+        p.join()
+    
     # Print results
     print("\n" + "=" * 60)
     print("EVALUATION RESULTS")
     print("=" * 60)
     print(f"Total episodes: {args.num_episodes}")
+    print(f"Workers used: {args.num_workers}")
     print(f"Goals scored: {goals_scored} ({100*goals_scored/args.num_episodes:.1f}%)")
     print(f"Clean aerial goals (no ground touch): {clean_goals} ({100*clean_goals/args.num_episodes:.1f}%)")
     print(f"Episodes with at least 1 flip reset: {sum(1 for x in flip_reset_counts if x > 0)}")
     print(f"Average flip resets per episode: {np.mean(flip_reset_counts):.2f}")
     print(f"Max flip resets in CLEAN GOAL episode: {best_flip_resets}")
     
-    if best_episode_info:
+    if best_result:
         print("\n" + "-" * 60)
         print("BEST EPISODE INFO (goal + clean aerial):")
         print("-" * 60)
-        print(f"  Episode number: {best_episode_info['episode']}")
-        print(f"  Flip resets: {best_episode_info['num_flip_resets']}")
-        print(f"  Ball touches: {best_episode_info['num_ball_touches']}")
-        print(f"  Setup targets hit: {best_episode_info['num_setup_targets_hit']}")
-        print(f"  Air targets hit after setup: {best_episode_info['num_air_targets_hit_after_setup']}")
+        print(f"  Flip resets: {best_result.num_flip_resets}")
+        print(f"  Ball touches: {best_result.num_ball_touches}")
+        print(f"  Setup targets hit: {best_result.num_setup_targets_hit}")
+        print(f"  Air targets hit after setup: {best_result.num_air_targets_hit_after_setup}")
     else:
         print("\n" + "-" * 60)
         print("WARNING: No episodes met criteria (goal + clean aerial)! No best path saved.")
         print("-" * 60)
     
-    # Distribution of flip resets
+    # Distribution
     print("\n" + "-" * 60)
     print("FLIP RESET DISTRIBUTION:")
     print("-" * 60)
@@ -620,5 +675,7 @@ def main():
 
 
 if __name__ == "__main__":
+    mp.set_start_method('spawn')
     main()
+
 
