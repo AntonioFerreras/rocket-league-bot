@@ -478,6 +478,10 @@ def worker_process(worker_id: int, checkpoint_path: str, num_episodes: int,
     random.seed(worker_seed)
     np.random.seed(worker_seed)
     torch.manual_seed(worker_seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(worker_seed)
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
     
     device = "cuda" if torch.cuda.is_available() else "cpu"
     
@@ -514,6 +518,11 @@ def worker_process(worker_id: int, checkpoint_path: str, num_episodes: int,
         state = env.state
         car = list(state.cars.values())[0]
         
+        # Calculate first observation checksum for debugging
+        agent_id = list(obs_dict.keys())[0]
+        first_obs = obs_dict[agent_id]
+        first_obs_checksum = float(np.sum(first_obs))
+        
         initial_state_data = {
             "ball_position": state.ball.position.copy(),
             "ball_linear_velocity": state.ball.linear_velocity.copy(),
@@ -526,6 +535,7 @@ def worker_process(worker_id: int, checkpoint_path: str, num_episodes: int,
             "car_on_ground": np.array([car.on_ground]),
             "car_has_jumped": np.array([car.has_jumped]),
             "car_air_time_since_jump": np.array([car.air_time_since_jump]),
+            "first_obs_checksum": np.array([first_obs_checksum]),
         }
         
         # Deep copy path_info to avoid reference issues with numpy arrays
@@ -643,6 +653,7 @@ def save_best_path(path_data: Dict, initial_state: Dict, num_flip_resets: int,
         car_on_ground=initial_state["car_on_ground"],
         car_has_jumped=initial_state["car_has_jumped"],
         car_air_time_since_jump=initial_state["car_air_time_since_jump"],
+        first_obs_checksum=initial_state.get("first_obs_checksum", np.array([0.0])),
     )
 
 

@@ -51,6 +51,7 @@ def load_path_data(path_file):
             "car_on_ground": bool(data["car_on_ground"][0]),
             "car_has_jumped": bool(data["car_has_jumped"][0]),
             "car_air_time_since_jump": float(data["car_air_time_since_jump"][0]) if "car_air_time_since_jump" in data else (0.0 if not bool(data["car_has_jumped"][0]) else 2.0),
+            "first_obs_checksum": float(data["first_obs_checksum"][0]) if "first_obs_checksum" in data else None,
         }
     
     # Load expected flip reset count if available
@@ -129,8 +130,9 @@ def build_replay_env(path_data):
             pass
 
     class NoTouchTimeoutCondition(DoneCondition[AgentID, GameState]):
-        def __init__(self, timeout_seconds: float, freeze_start_tick: bool = False):
+        def __init__(self, timeout_seconds: float, setup_timeout_seconds: float = 15.0, freeze_start_tick: bool = False):
             self.timeout_seconds = timeout_seconds
+            self.setup_timeout_seconds = setup_timeout_seconds
             self.last_touch_tick = None
             self.freeze_start_tick = freeze_start_tick
 
@@ -141,6 +143,19 @@ def build_replay_env(path_data):
                 self.last_touch_tick = initial_state.tick_count
 
         def is_done(self, agents: List[AgentID], state: GameState, shared_info: Dict[str, Any]) -> Dict[AgentID, bool]:
+            from path_generator import SETUP_INDEX
+            
+            # Check if we're in setup phase
+            condition_data = shared_info.get("condition_data")
+            current_idx = shared_info.get("current_target_index", 0)
+            
+            in_setup = False
+            if condition_data is not None and current_idx < len(condition_data):
+                in_setup = condition_data[current_idx, SETUP_INDEX] > 0.5
+            
+            # Use longer timeout during setup
+            effective_timeout = self.setup_timeout_seconds if in_setup else self.timeout_seconds
+            
             if any(car.ball_touches > 0 for car in state.cars.values()):
                 self.last_touch_tick = state.tick_count
                 done = False
@@ -148,7 +163,7 @@ def build_replay_env(path_data):
                 if self.last_touch_tick is None:
                     return {agent: False for agent in agents}
                 time_elapsed = (state.tick_count - self.last_touch_tick) / common_values.TICKS_PER_SECOND
-                done = time_elapsed >= self.timeout_seconds
+                done = time_elapsed >= effective_timeout
             return {agent: done for agent in agents}
 
     class BallHitGroundTimeoutCondition(DoneCondition[AgentID, GameState]):
@@ -438,6 +453,17 @@ def main():
         print(f"  Expected flip resets: {expected_flip_resets}")
     
     # Build environment
+    # Set seeds for reproducibility
+    import random
+    seed = 42  # Fixed seed for replay
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+    
     env = build_replay_env(path_data)
     
     # Load actor model
@@ -482,6 +508,54 @@ def main():
             done = False
             step_count = 0
             
+            # Debug: print initial state after reset to compare with saved
+            state = env.state
+            car = list(state.cars.values())[0]
+            initial_state = path_data.get("initial_state")
+            if initial_state is not None:
+                print("\n  -- Initial State Comparison (saved vs actual after reset) --")
+                print(f"  Ball pos: {initial_state['ball_position']} vs {state.ball.position}")
+                ball_pos_diff = np.abs(initial_state['ball_position'] - state.ball.position)
+                print(f"  Ball diff: {ball_pos_diff}, max: {ball_pos_diff.max()}")
+                print(f"  Car pos:  {initial_state['car_position']} vs {car.physics.position}")
+                car_pos_diff = np.abs(initial_state['car_position'] - car.physics.position)
+                print(f"  Car diff: {car_pos_diff}, max: {car_pos_diff.max()}")
+                print(f"  Car euler: {initial_state['car_euler_angles']} vs {car.physics.euler_angles}")
+                euler_diff = np.abs(initial_state['car_euler_angles'] - car.physics.euler_angles)
+                print(f"  Euler diff: {euler_diff}, max: {euler_diff.max()}")
+                print(f"  Car boost: {initial_state['car_boost_amount']} vs {car.boost_amount}")
+                print(f"  Car on_ground: {initial_state['car_on_ground']} vs {car.on_ground}")
+                print(f"  Car has_jumped: {initial_state['car_has_jumped']} vs {car.has_jumped}")
+                print(f"  Tick count: {state.tick_count}")
+                
+                # Check for any mismatch
+                all_match = (
+                    np.allclose(initial_state['ball_position'], state.ball.position) and
+                    np.allclose(initial_state['car_position'], car.physics.position) and
+                    np.allclose(initial_state['car_euler_angles'], car.physics.euler_angles) and
+                    abs(initial_state['car_boost_amount'] - car.boost_amount) < 0.01
+                )
+                if all_match:
+                    print("  ✓ Initial state matches!")
+                else:
+                    print("  ✗ INITIAL STATE MISMATCH - This could cause trajectory divergence!")
+                
+                # Print first observation checksum for comparison with eval
+                agent_id = list(obs_dict.keys())[0]
+                first_obs = obs_dict[agent_id]
+                obs_checksum = np.sum(first_obs)
+                print(f"  First obs checksum: {obs_checksum:.6f}")
+                
+                # Compare with saved checksum if available
+                saved_checksum = initial_state.get("first_obs_checksum")
+                if saved_checksum is not None:
+                    print(f"  Eval obs checksum:  {saved_checksum:.6f}")
+                    if abs(obs_checksum - saved_checksum) < 0.001:
+                        print("  ✓ Observation checksums match!")
+                    else:
+                        print(f"  ✗ OBSERVATION MISMATCH! Diff: {abs(obs_checksum - saved_checksum):.6f}")
+                print()
+            
             # Action recording lists
             recorded_actions = []  # Policy action indices (one per decision)
             recorded_ticks = []    # Tick count when action was taken
@@ -494,6 +568,12 @@ def main():
                     actions, _ = actor.get_action(agent_ids, obs_list, deterministic=args.deterministic)
                 
                 action_dict = {agent_id: np.array([actions[i]]) for i, agent_id in enumerate(agent_ids)}
+                
+                # Print trajectory checkpoint every 20 steps
+                if step_count % 20 == 0 and step_count > 0:
+                    state = env.state
+                    car = list(state.cars.values())[0]
+                    print(f"  Step {step_count}: car_pos={car.physics.position[:2].round(1)}, ball_pos={state.ball.position[:2].round(1)}, action={actions[0]}")
                 
                 # Record action before step
                 if recording_actions:
