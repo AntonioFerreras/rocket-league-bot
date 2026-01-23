@@ -650,7 +650,7 @@ def main():
     parser = argparse.ArgumentParser(description="Multiprocess evaluation for flip resets")
     parser.add_argument("--checkpoint", type=str, required=True,
                         help="Path to checkpoint folder containing ppo_learner/actor.pt")
-    parser.add_argument("--num_episodes", type=int, default=10000,
+    parser.add_argument("-N", "--num_episodes", type=int, default=10000,
                         help="Total number of episodes to run")
     parser.add_argument("--num_workers", type=int, default=16,
                         help="Number of parallel worker processes")
@@ -660,6 +660,8 @@ def main():
                         help="Output file for best path data")
     parser.add_argument("--spawn_index", type=int, default=None,
                         help="Kickoff spawn index (0-4). Default: random. 0=left corner, 1=right corner, 2=left back, 3=right back, 4=far back")
+    parser.add_argument("--max_resets", type=int, default=None,
+                        help="Max flip resets to consider (episodes with more won't be saved as best)")
     args = parser.parse_args()
     
     # Use time-based seed if not specified
@@ -672,6 +674,8 @@ def main():
     print(f"Checkpoint: {args.checkpoint}")
     spawn_desc = f"spawn index {args.spawn_index}" if args.spawn_index is not None else "random spawn"
     print(f"Setup spawn: {spawn_desc}")
+    max_resets_desc = f"max {args.max_resets}" if args.max_resets is not None else "unlimited"
+    print(f"Flip resets: {max_resets_desc}")
     print(f"Only paths that end in GOAL + CLEAN AERIAL will be saved as best\n")
     
     # Distribute episodes across workers
@@ -717,6 +721,10 @@ def main():
         
         if result.scored_goal and result.clean_aerial:
             clean_goals += 1
+            
+            # Skip if above max flip resets threshold
+            if args.max_resets is not None and result.num_flip_resets > args.max_resets:
+                continue
             
             # Check if this is best (flip resets is priority, ball velocity is tiebreaker)
             is_better = (
