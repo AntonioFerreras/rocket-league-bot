@@ -88,103 +88,47 @@ DEFAULT_KEY_MAPPING = {
 
 
 class LookupTableDecoder:
-    """Decodes action indices back to control values using rlgym's exact lookup table."""
+    """Decodes action indices back to control values."""
     
     def __init__(self):
-        # This is the EXACT lookup table from rlgym's LookupTableAction
-        # Format: [throttle, steer, pitch, yaw, roll, jump, boost, handbrake]
-        self.lookup_table = np.array([
-            [-1, -1, 0, -1, 0, 0, 0, 0],
-            [-1, -1, 0, -1, 0, 0, 0, 1],
-            [-1, 0, 0, 0, 0, 0, 0, 0],
-            [-1, 0, 0, 0, 0, 0, 0, 1],
-            [-1, 1, 0, 1, 0, 0, 0, 0],
-            [-1, 1, 0, 1, 0, 0, 0, 1],
-            [0, -1, 0, -1, 0, 0, 0, 0],
-            [0, -1, 0, -1, 0, 0, 0, 1],
-            [0, 0, 0, 0, 0, 0, 0, 0],
-            [0, 0, 0, 0, 0, 0, 0, 1],
-            [0, 1, 0, 1, 0, 0, 0, 0],
-            [0, 1, 0, 1, 0, 0, 0, 1],
-            [1, -1, 0, -1, 0, 0, 0, 0],
-            [1, -1, 0, -1, 0, 0, 0, 1],
-            [1, -1, 0, -1, 0, 0, 1, 0],
-            [1, -1, 0, -1, 0, 0, 1, 1],
-            [1, 0, 0, 0, 0, 0, 0, 0],
-            [1, 0, 0, 0, 0, 0, 0, 1],
-            [1, 0, 0, 0, 0, 0, 1, 0],
-            [1, 0, 0, 0, 0, 0, 1, 1],
-            [1, 1, 0, 1, 0, 0, 0, 0],
-            [1, 1, 0, 1, 0, 0, 0, 1],
-            [1, 1, 0, 1, 0, 0, 1, 0],
-            [1, 1, 0, 1, 0, 0, 1, 1],
-            [0, -1, -1, -1, -1, 0, 0, 0],
-            [1, -1, -1, -1, -1, 0, 1, 0],
-            [0, -1, -1, -1, 0, 0, 0, 0],
-            [1, -1, -1, -1, 0, 0, 1, 0],
-            [0, -1, -1, -1, 1, 0, 0, 0],
-            [1, -1, -1, -1, 1, 0, 1, 0],
-            [0, 0, -1, 0, -1, 0, 0, 0],
-            [1, 0, -1, 0, -1, 0, 1, 0],
-            [0, 0, -1, 0, -1, 1, 0, 1],
-            [1, 0, -1, 0, -1, 1, 1, 1],
-            [0, 0, -1, 0, 0, 0, 0, 0],
-            [1, 0, -1, 0, 0, 0, 1, 0],
-            [0, 0, -1, 0, 0, 1, 0, 1],
-            [1, 0, -1, 0, 0, 1, 1, 1],
-            [0, 0, -1, 0, 1, 0, 0, 0],
-            [1, 0, -1, 0, 1, 0, 1, 0],
-            [0, 0, -1, 0, 1, 1, 0, 1],
-            [1, 0, -1, 0, 1, 1, 1, 1],
-            [0, 1, -1, 1, -1, 0, 0, 0],
-            [1, 1, -1, 1, -1, 0, 1, 0],
-            [0, 1, -1, 1, 0, 0, 0, 0],
-            [1, 1, -1, 1, 0, 0, 1, 0],
-            [0, 1, -1, 1, 1, 0, 0, 0],
-            [1, 1, -1, 1, 1, 0, 1, 0],
-            [0, -1, 0, -1, -1, 0, 0, 0],
-            [1, -1, 0, -1, -1, 0, 1, 0],
-            [0, -1, 0, -1, 1, 0, 0, 0],
-            [1, -1, 0, -1, 1, 0, 1, 0],
-            [0, 0, 0, 0, -1, 0, 0, 0],
-            [1, 0, 0, 0, -1, 0, 1, 0],
-            [0, 0, 0, 0, -1, 1, 0, 1],
-            [1, 0, 0, 0, -1, 1, 1, 1],
-            [0, 0, 0, 0, 0, 1, 0, 0],
-            [1, 0, 0, 0, 0, 1, 1, 0],
-            [0, 0, 0, 0, 1, 0, 0, 0],
-            [1, 0, 0, 0, 1, 0, 1, 0],
-            [0, 0, 0, 0, 1, 1, 0, 1],
-            [1, 0, 0, 0, 1, 1, 1, 1],
-            [0, 1, 0, 1, -1, 0, 0, 0],
-            [1, 1, 0, 1, -1, 0, 1, 0],
-            [0, 1, 0, 1, 1, 0, 0, 0],
-            [1, 1, 0, 1, 1, 0, 1, 0],
-            [0, -1, 1, -1, -1, 0, 0, 0],
-            [1, -1, 1, -1, -1, 0, 1, 0],
-            [0, -1, 1, -1, 0, 0, 0, 0],
-            [1, -1, 1, -1, 0, 0, 1, 0],
-            [0, -1, 1, -1, 1, 0, 0, 0],
-            [1, -1, 1, -1, 1, 0, 1, 0],
-            [0, 0, 1, 0, -1, 0, 0, 0],
-            [1, 0, 1, 0, -1, 0, 1, 0],
-            [0, 0, 1, 0, -1, 1, 0, 1],
-            [1, 0, 1, 0, -1, 1, 1, 1],
-            [0, 0, 1, 0, 0, 0, 0, 0],
-            [1, 0, 1, 0, 0, 0, 1, 0],
-            [0, 0, 1, 0, 0, 1, 0, 1],
-            [1, 0, 1, 0, 0, 1, 1, 1],
-            [0, 0, 1, 0, 1, 0, 0, 0],
-            [1, 0, 1, 0, 1, 0, 1, 0],
-            [0, 0, 1, 0, 1, 1, 0, 1],
-            [1, 0, 1, 0, 1, 1, 1, 1],
-            [0, 1, 1, 1, -1, 0, 0, 0],
-            [1, 1, 1, 1, -1, 0, 1, 0],
-            [0, 1, 1, 1, 0, 0, 0, 0],
-            [1, 1, 1, 1, 0, 0, 1, 0],
-            [0, 1, 1, 1, 1, 0, 0, 0],
-            [1, 1, 1, 1, 1, 0, 1, 0],
-        ], dtype=np.float32)
+        # Build the same lookup table used by rlgym
+        self.lookup_table = self._build_lookup_table()
+    
+    def _build_lookup_table(self):
+        """Build the lookup table matching rlgym's LookupTableAction."""
+        actions = []
+        
+        # Throttle: -1, 0, 1
+        throttles = [-1, 0, 1]
+        # Steer: -1, 0, 1
+        steers = [-1, 0, 1]
+        # Pitch: -1, 0, 1
+        pitches = [-1, 0, 1]
+        # Yaw: -1, 0, 1
+        yaws = [-1, 0, 1]
+        # Roll: -1, 0, 1
+        rolls = [-1, 0, 1]
+        # Jump: 0, 1
+        jumps = [0, 1]
+        # Boost: 0, 1
+        boosts = [0, 1]
+        # Handbrake: 0, 1
+        handbrakes = [0, 1]
+        
+        for throttle in throttles:
+            for steer in steers:
+                for pitch in pitches:
+                    for yaw in yaws:
+                        for roll in rolls:
+                            for jump in jumps:
+                                for boost in boosts:
+                                    for handbrake in handbrakes:
+                                        actions.append([
+                                            throttle, steer, pitch, yaw, roll,
+                                            jump, boost, handbrake
+                                        ])
+        
+        return np.array(actions, dtype=np.float32)
     
     def decode(self, action_index):
         """Convert action index to control values."""
@@ -545,19 +489,6 @@ class ActionPlaybackApp:
                 
                 # Decode action index to control values
                 action_values = self.decoder.decode(action_idx)
-                
-                # Debug: print first 20 actions
-                if i < 20:
-                    throttle, steer, pitch, yaw, roll, jump, boost, handbrake = action_values
-                    parts = []
-                    if throttle > 0.5: parts.append("FWD")
-                    elif throttle < -0.5: parts.append("REV")
-                    if steer > 0.5: parts.append("R")
-                    elif steer < -0.5: parts.append("L")
-                    if jump > 0.5: parts.append("JUMP")
-                    if boost > 0.5: parts.append("BOOST")
-                    if not parts: parts.append("NONE")
-                    print(f"Action {i}: idx={action_idx} -> {'+'.join(parts)}")
                 
                 # Apply the action (press/release keys)
                 self._apply_action(action_values)
