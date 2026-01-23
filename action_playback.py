@@ -546,6 +546,19 @@ class ActionPlaybackApp:
                 # Decode action index to control values
                 action_values = self.decoder.decode(action_idx)
                 
+                # Debug: print first 20 actions
+                if i < 20:
+                    throttle, steer, pitch, yaw, roll, jump, boost, handbrake = action_values
+                    parts = []
+                    if throttle > 0.5: parts.append("FWD")
+                    elif throttle < -0.5: parts.append("REV")
+                    if steer > 0.5: parts.append("R")
+                    elif steer < -0.5: parts.append("L")
+                    if jump > 0.5: parts.append("JUMP")
+                    if boost > 0.5: parts.append("BOOST")
+                    if not parts: parts.append("NONE")
+                    print(f"Action {i}: idx={action_idx} -> {'+'.join(parts)}")
+                
                 # Apply the action (press/release keys)
                 self._apply_action(action_values)
                 
