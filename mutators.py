@@ -151,36 +151,20 @@ class AirDribbleDirectedMutator(AirDribbleMutator):
             ball_spawn = path_info["ball_spawn"]
             car_spawn = path_info["car_spawn"]
             
-            # Ball on ground with low velocity toward first target
+            # Ball on ground with zero velocity
             state.ball.position = ball_spawn.astype(np.float32)
-            
-            if len(path_points) > 0:
-                first_target = path_points[0]
-            else:
-                first_target = end_point
-            
-            objective_direction = normalize(first_target - ball_spawn)
-            objective_direction[2] = 0.0  # Keep on ground
-            
-            # Ball starts stationary or with small velocity
-            ball_vel = objective_direction * random.uniform(0, 200)
-            ball_vel[2] = 0.0  # No vertical velocity on ground
-            state.ball.linear_velocity = ball_vel.astype(np.float32)
+            state.ball.linear_velocity = np.zeros(3, dtype=np.float32)
             state.ball.angular_velocity = np.zeros(3, dtype=np.float32)
             
             # Position car at car spawn (on ground)
             for car in state.cars.values():
                 car.physics.position = car_spawn.astype(np.float32)
                 
-                # Aim car toward the ball
-                to_ball = state.ball.position - car.physics.position
-                to_ball[2] = 0.0  # Keep horizontal
-                car.physics.euler_angles = dir_to_euler_yzx(to_ball)
+                # Random yaw direction for car
+                random_yaw = random.uniform(-np.pi, np.pi)
+                car.physics.euler_angles = np.array([0.0, random_yaw, 0.0], dtype=np.float32)
                 
-                # Small initial velocity toward ball
-                car_vel = normalize(to_ball) * random.uniform(0, 300)
-                car_vel[2] = 0.0
-                car.physics.linear_velocity = car_vel.astype(np.float32)
+                car.physics.linear_velocity = np.zeros(3, dtype=np.float32)
                 car.physics.angular_velocity = np.zeros(3, dtype=np.float32)
                 
                 car.boost_amount = 100.0

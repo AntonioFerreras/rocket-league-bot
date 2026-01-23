@@ -255,36 +255,26 @@ def get_car_spawn_near_ball(ball_pos):
             -BACK_WALL_Y + wall_margin <= y <= BACK_WALL_Y - wall_margin):
             return np.array([x, y, 17.0])  # Car on ground height
 
-def get_car_spawn_inline_with_wall(ball_pos, wall_point):
+def get_car_spawn_for_setup(ball_pos):
     """
-    Get a ground position for car spawn that is in-line with ball and wall point.
-    Car is placed behind the ball (opposite direction from wall).
-    Must be on ground, not within 600 of walls.
+    Get a random ground position for car spawn for setup paths.
+    Must be within 4800 unit square of ball (2400 radius), on ground, not within 600 of walls.
     """
     wall_margin = 600
+    spawn_radius = 2400  # Radius of 2400, so 4800 unit square
     
-    # Direction from ball to wall
-    direction = wall_point[:2] - ball_pos[:2]
-    dist_to_wall = np.linalg.norm(direction)
-    
-    if dist_to_wall < 1e-4:
-        # Fallback if ball is at wall point
-        return get_car_spawn_near_ball(ball_pos)
-    
-    direction_normalized = direction / dist_to_wall
-    
-    # Place car behind ball (opposite direction from wall)
-    # Random distance between 300-800 units behind ball
-    behind_distance = random.uniform(300, 800)
-    
-    car_x = ball_pos[0] - direction_normalized[0] * behind_distance
-    car_y = ball_pos[1] - direction_normalized[1] * behind_distance
-    
-    # Clamp to field bounds with wall margin
-    car_x = max(-SIDE_WALL_X + wall_margin, min(SIDE_WALL_X - wall_margin, car_x))
-    car_y = max(-BACK_WALL_Y + wall_margin, min(BACK_WALL_Y - wall_margin, car_y))
-    
-    return np.array([car_x, car_y, 17.0])  # Car on ground height
+    while True:
+        # Random offset within 1000 unit square
+        offset_x = random.uniform(-spawn_radius, spawn_radius)
+        offset_y = random.uniform(-spawn_radius, spawn_radius)
+        
+        x = ball_pos[0] + offset_x
+        y = ball_pos[1] + offset_y
+        
+        # Clamp to field bounds with wall margin
+        if (-SIDE_WALL_X + wall_margin <= x <= SIDE_WALL_X - wall_margin and
+            -BACK_WALL_Y + wall_margin <= y <= BACK_WALL_Y - wall_margin):
+            return np.array([x, y, 17.0])  # Car on ground height
 
 def generate_ground_setup_points(ball_spawn, wall_point, step_distance):
     """
@@ -435,7 +425,7 @@ def generate_aerial_path_from_wall(start_point, end_point, wall_side, step_dista
     
     return path_points, raw_control_point
 
-def generate_random_path(step_distance=1000, setup_step_distance=1000, has_setup_probability=0.5, flip_reset_probability=0.7):
+def generate_random_path(step_distance=1000, setup_step_distance=1000, has_setup_probability=0.99, flip_reset_probability=0.7):
     """
     Generates a path from a random point to a goal.
     30% chance: Setup path (ground -> wall -> aerial)
@@ -465,7 +455,7 @@ def generate_random_path(step_distance=1000, setup_step_distance=1000, has_setup
         # Pick wall point first, then constrain ball spawn by 20 degree angle rule
         wall_point, wall_side = get_wall_point_first()
         ball_spawn = get_ground_ball_spawn_for_wall(wall_point, wall_side)
-        car_spawn = get_car_spawn_inline_with_wall(ball_spawn, wall_point)
+        car_spawn = get_car_spawn_for_setup(ball_spawn)
         
         # Generate ground points from ball to wall (use smaller step for setup to encourage dribbling)
         ground_points = generate_ground_setup_points(ball_spawn, wall_point, setup_step_distance)

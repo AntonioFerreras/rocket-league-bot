@@ -100,7 +100,7 @@ class DistancePlayerToBallReward(RewardFunction[AgentID, GameState, float]):
             return 0.0
 
         dist = np.linalg.norm(state.cars[agent].physics.position - (state.ball.position)) - BALL_RADIUS
-        dist_reward = 0.2*np.exp(-100.0 * dist / CAR_MAX_SPEED)  # Inspired by https://arxiv.org/abs/2105.12196
+        dist_reward = 0.6*np.exp(-100.0 * dist / CAR_MAX_SPEED)  # Inspired by https://arxiv.org/abs/2105.12196
 
         # height_reward = height_sigmoid(state.cars[agent].physics.position[2])
         return dist_reward #* height_reward
@@ -529,7 +529,7 @@ class TouchReward(RewardFunction[AgentID, GameState, float]):
         #     return 0.0
 
         if condition_data[GORILLA_GLUE_INDEX] > 0.5:
-            reward = state.cars[agent].ball_touches * vertical*.2
+            reward = state.cars[agent].ball_touches * vertical*.6
         elif condition_data[FLIP_RESET_INDEX] < 0.5:
             
             reward = 0.0 # accel_dir_z*accel_dir_z * hit_ball * 0.25
@@ -895,6 +895,66 @@ class SetupBallSpeedPunishment(RewardFunction[AgentID, GameState, float]):
             # Punishment proportional to how much over threshold
             excess_speed = (ball_speed - self.speed_threshold) / BALL_MAX_SPEED
             return -excess_speed
+        
+        return 0.0
+
+
+class SetupBoostPunishment(RewardFunction[AgentID, GameState, float]):
+    """
+    Punishes using boost during setup phase, except for the last 3 setup points.
+    This encourages the bot to conserve boost during the early dribbling phase
+    and only use it when approaching the wall.
+    """
+    def __init__(self, punishment_scale: float = 0.1):
+        """
+        :param punishment_scale: Scale for boost punishment (per unit of boost used)
+        """
+        self.punishment_scale = punishment_scale
+        self.prev_boost = {}
+        self.num_setup_points = None
+
+    def reset(self, agents: List[AgentID], initial_state: GameState, shared_info: Dict[str, Any]) -> None:
+        self.prev_boost = {agent: initial_state.cars[agent].boost_amount for agent in agents}
+        # Count total number of setup points
+        condition_data = shared_info.get("condition_data", [])
+        self.num_setup_points = sum(1 for cd in condition_data if cd[SETUP_INDEX] > 0.5)
+
+    def get_rewards(self, agents: List[AgentID], state: GameState, is_terminated: Dict[AgentID, bool],
+                    is_truncated: Dict[AgentID, bool], shared_info: Dict[str, Any]) -> Dict[AgentID, float]:
+        return {agent: self._get_reward(agent, state, shared_info) for agent in agents}
+
+    def _get_reward(self, agent: AgentID, state: GameState, shared_info: Dict[str, Any]) -> float:
+        current_idx = shared_info["current_target_index"]
+        condition_data = shared_info["condition_data"]
+        
+        # Check if we're in setup
+        if current_idx >= len(condition_data):
+            self.prev_boost[agent] = state.cars[agent].boost_amount
+            return 0.0
+        
+        in_setup = condition_data[current_idx][SETUP_INDEX] > 0.5
+        
+        if not in_setup:
+            self.prev_boost[agent] = state.cars[agent].boost_amount
+            return 0.0
+        
+        # Check if this is one of the last 3 setup points (no punishment there)
+        # current_idx is 0-based, and setup points are indices 0 to num_setup_points-1
+        # Last 3 setup points are: num_setup_points-3, num_setup_points-2, num_setup_points-1
+        if self.num_setup_points is not None and current_idx >= self.num_setup_points - 3:
+            self.prev_boost[agent] = state.cars[agent].boost_amount
+            return 0.0
+        
+        # Calculate boost used
+        current_boost = state.cars[agent].boost_amount
+        prev_boost = self.prev_boost.get(agent, current_boost)
+        boost_used = max(0, prev_boost - current_boost)  # Only count boost consumption, not gains
+        
+        self.prev_boost[agent] = current_boost
+        
+        # Punish boost usage
+        if boost_used > 0:
+            return -boost_used * self.punishment_scale
         
         return 0.0
 

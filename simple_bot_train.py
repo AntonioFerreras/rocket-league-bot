@@ -104,6 +104,7 @@ def build_rlgym_v2_env(debug=False):
         SetupDribbleReward,
         SetupBallSpeedPunishment,
         SetupCompletionPunishment,
+        SetupBoostPunishment,
     )
     from mutators import AirDribbleMutator, AirDribbleDirectedMutator
 
@@ -112,14 +113,16 @@ def build_rlgym_v2_env(debug=False):
     class NoTouchTimeoutCondition(DoneCondition[AgentID, GameState]):
         """
         A DoneCondition that is satisfied when no car has touched the ball for a specified amount of time.
-        Timer starts when the ball is touched for the first time.
+        Uses a longer timeout during setup phase.
         """
 
-        def __init__(self, timeout_seconds: float, freeze_start_tick: bool = False):
+        def __init__(self, timeout_seconds: float, setup_timeout_seconds: float = 15.0, freeze_start_tick: bool = False):
             """
-            :param timeout_seconds: Timeout in seconds
+            :param timeout_seconds: Timeout in seconds (after setup)
+            :param setup_timeout_seconds: Timeout in seconds during setup phase
             """
             self.timeout_seconds = timeout_seconds
+            self.setup_timeout_seconds = setup_timeout_seconds
             self.last_touch_tick = None
             self.freeze_start_tick = freeze_start_tick
 
@@ -130,6 +133,19 @@ def build_rlgym_v2_env(debug=False):
                 self.last_touch_tick = initial_state.tick_count
 
         def is_done(self, agents: List[AgentID], state: GameState, shared_info: Dict[str, Any]) -> Dict[AgentID, bool]:
+            from path_generator import SETUP_INDEX
+            
+            # Check if we're in setup phase
+            condition_data = shared_info.get("condition_data")
+            current_idx = shared_info.get("current_target_index", 0)
+            
+            in_setup = False
+            if condition_data is not None and current_idx < len(condition_data):
+                in_setup = condition_data[current_idx, SETUP_INDEX] > 0.5
+            
+            # Use longer timeout during setup
+            effective_timeout = self.setup_timeout_seconds if in_setup else self.timeout_seconds
+            
             if any(car.ball_touches > 0 for car in state.cars.values()):
                 self.last_touch_tick = state.tick_count
                 done = False
@@ -137,7 +153,7 @@ def build_rlgym_v2_env(debug=False):
                 if self.last_touch_tick is None:
                     return {agent: False for agent in agents}
                 time_elapsed = (state.tick_count - self.last_touch_tick) / common_values.TICKS_PER_SECOND
-                done = time_elapsed >= self.timeout_seconds
+                done = time_elapsed >= effective_timeout
 
             return {agent: done for agent in agents}
 
@@ -261,6 +277,7 @@ def build_rlgym_v2_env(debug=False):
     setup_dribble_reward_weight = 15.0  # Strong reward for actual dribbling
     setup_ball_speed_punishment_weight = 5.0  # Punish hitting ball too hard
     setup_completion_punishment_weight = 10.0  # NUCLEAR: massive punishment for not completing setup
+    setup_boost_punishment_weight = 1.0  # Small punishment for using boost early in setup (not last 3 points)
 
     from rlgym.api import RewardFunction        
     
@@ -320,6 +337,7 @@ def build_rlgym_v2_env(debug=False):
         (SetupDribbleReward(), setup_dribble_reward_weight),
         (SetupBallSpeedPunishment(), setup_ball_speed_punishment_weight),
         (SetupCompletionPunishment(), setup_completion_punishment_weight),
+        (SetupBoostPunishment(), setup_boost_punishment_weight),
     )
 
     class FreestyleObs(DefaultObs):

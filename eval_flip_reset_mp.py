@@ -39,12 +39,13 @@ class EpisodeResult:
     num_ball_touches: int
     num_setup_targets_hit: int
     num_air_targets_hit_after_setup: int
+    ball_velocity_to_goal: float = 0.0  # Ball's velocity component toward goal at time of goal
     # Path data for saving (only populated if this is a candidate for best)
     path_data: Optional[Dict] = None
     initial_state: Optional[Dict] = None
 
 
-def build_eval_env(has_setup_probability=1.0, flip_reset_probability=1.0):
+def build_eval_env(has_setup_probability=1.0, flip_reset_probability=1.0, spawn_index=None):
     """Build environment with custom setup/flip_reset probabilities."""
     from rlgym.rocket_league.common_values import BALL_RESTING_HEIGHT
     from rlgym.api import RLGym, StateMutator, DoneCondition, AgentID
@@ -66,8 +67,9 @@ def build_eval_env(has_setup_probability=1.0, flip_reset_probability=1.0):
     from path_generator import generate_random_path
 
     class NoTouchTimeoutCondition(DoneCondition[AgentID, GameState]):
-        def __init__(self, timeout_seconds: float, freeze_start_tick: bool = False):
+        def __init__(self, timeout_seconds: float, setup_timeout_seconds: float = 15.0, freeze_start_tick: bool = False):
             self.timeout_seconds = timeout_seconds
+            self.setup_timeout_seconds = setup_timeout_seconds
             self.last_touch_tick = None
             self.freeze_start_tick = freeze_start_tick
 
@@ -78,6 +80,19 @@ def build_eval_env(has_setup_probability=1.0, flip_reset_probability=1.0):
                 self.last_touch_tick = initial_state.tick_count
 
         def is_done(self, agents: List[AgentID], state: GameState, shared_info: Dict[str, Any]) -> Dict[AgentID, bool]:
+            from path_generator import SETUP_INDEX
+            
+            # Check if we're in setup phase
+            condition_data = shared_info.get("condition_data")
+            current_idx = shared_info.get("current_target_index", 0)
+            
+            in_setup = False
+            if condition_data is not None and current_idx < len(condition_data):
+                in_setup = condition_data[current_idx, SETUP_INDEX] > 0.5
+            
+            # Use longer timeout during setup
+            effective_timeout = self.setup_timeout_seconds if in_setup else self.timeout_seconds
+            
             if any(car.ball_touches > 0 for car in state.cars.values()):
                 self.last_touch_tick = state.tick_count
                 done = False
@@ -85,7 +100,7 @@ def build_eval_env(has_setup_probability=1.0, flip_reset_probability=1.0):
                 if self.last_touch_tick is None:
                     return {agent: False for agent in agents}
                 time_elapsed = (state.tick_count - self.last_touch_tick) / common_values.TICKS_PER_SECOND
-                done = time_elapsed >= self.timeout_seconds
+                done = time_elapsed >= effective_timeout
             return {agent: done for agent in agents}
 
     class BallHitGroundTimeoutCondition(DoneCondition[AgentID, GameState]):
@@ -157,62 +172,128 @@ def build_eval_env(has_setup_probability=1.0, flip_reset_probability=1.0):
             return repeat_actions
 
     class EvalAirDribbleDirectedMutator(StateMutator[GameState]):
-        def __init__(self, num_conditions: int, has_setup_probability: float, flip_reset_probability: float):
+        # Kickoff spawn positions and yaws (from KickoffMutator)
+        SPAWN_BLUE_POS = np.array([[-2048, -2560, 17], [2048, -2560, 17], [-256, -3840, 17], [256, -3840, 17], [0, -4608, 17]], dtype=np.float32)
+        SPAWN_BLUE_YAW = [0.25 * np.pi, 0.75 * np.pi, 0.5 * np.pi, 0.5 * np.pi, 0.5 * np.pi]
+        
+        def __init__(self, num_conditions: int, has_setup_probability: float, flip_reset_probability: float, spawn_index: int = None):
             self.num_conditions = num_conditions
             self.has_setup_probability = has_setup_probability
             self.flip_reset_probability = flip_reset_probability
+            self.spawn_index = spawn_index  # None = random, 0-4 = specific spawn
 
         def apply(self, state: GameState, shared_info: Dict[str, Any]) -> None:
+            from rlgym.rocket_league.common_values import BALL_RESTING_HEIGHT
+            from path_generator import (
+                get_random_point_in_goal, get_wall_point_first, 
+                generate_ground_setup_points, generate_aerial_path_from_wall,
+                GROUND_Z
+            )
+            
             state.config.boost_consumption = 0.001
             
-            path_points, start_point, end_point, control_point, glue_conditions, flip_reset_conditions, setup_conditions, path_info = generate_random_path(
-                step_distance=1000,
-                has_setup_probability=self.has_setup_probability,
-                flip_reset_probability=self.flip_reset_probability
-            )
-
-            num_path_points = len(path_points)
-            condition_data = np.zeros((num_path_points, self.num_conditions), dtype=np.float32)
-
-            if num_path_points > 0:
-                condition_data[:, 6] = glue_conditions
-                condition_data[:, 7] = flip_reset_conditions
-                condition_data[:, 8] = setup_conditions
-            
-            has_setup = path_info["has_setup"]
+            # Determine if this is a setup path
+            has_setup = random.random() < self.has_setup_probability
             
             if has_setup:
-                ball_spawn = path_info["ball_spawn"]
-                car_spawn = path_info["car_spawn"]
-                
-                state.ball.position = ball_spawn.astype(np.float32)
-                
-                first_target = path_points[0] if len(path_points) > 0 else end_point
-                objective_direction = normalize(first_target - ball_spawn)
-                objective_direction[2] = 0.0
-                
-                ball_vel = objective_direction * random.uniform(0, 200)
-                ball_vel[2] = 0.0
-                state.ball.linear_velocity = ball_vel.astype(np.float32)
+                # Ball in center like kickoff
+                ball_spawn = np.array([0, 0, BALL_RESTING_HEIGHT], dtype=np.float32)
+                state.ball.position = ball_spawn.copy()
+                state.ball.linear_velocity = np.zeros(3, dtype=np.float32)
                 state.ball.angular_velocity = np.zeros(3, dtype=np.float32)
                 
+                # Select car spawn index
+                if self.spawn_index is not None:
+                    spawn_idx = self.spawn_index
+                else:
+                    spawn_idx = random.randint(0, 4)
+                
+                car_spawn = self.SPAWN_BLUE_POS[spawn_idx].copy()
+                car_yaw = self.SPAWN_BLUE_YAW[spawn_idx]
+                
                 for car in state.cars.values():
-                    car.physics.position = car_spawn.astype(np.float32)
-                    
-                    to_ball = state.ball.position - car.physics.position
-                    to_ball[2] = 0.0
-                    car.physics.euler_angles = dir_to_euler_yzx(to_ball)
-                    
-                    car_vel = normalize(to_ball) * random.uniform(0, 300)
-                    car_vel[2] = 0.0
-                    car.physics.linear_velocity = car_vel.astype(np.float32)
+                    car.physics.position = car_spawn.copy()
+                    car.physics.euler_angles = np.array([0.0, car_yaw, 0.0], dtype=np.float32)
+                    car.physics.linear_velocity = np.zeros(3, dtype=np.float32)
                     car.physics.angular_velocity = np.zeros(3, dtype=np.float32)
-                    
                     car.boost_amount = 100.0
                     car.on_ground = True
                     car.has_jumped = False
                     car.air_time_since_jump = 0.0
+                
+                # Generate path from CENTER (where ball actually is)
+                end_point = get_random_point_in_goal()
+                wall_point, wall_side = get_wall_point_first()
+                
+                # Ground setup points from center to wall
+                ground_points = generate_ground_setup_points(
+                    np.array([0, 0, GROUND_Z]), wall_point, 1000
+                )
+                
+                # Wall climb point
+                wall_climb_point = wall_point.copy()
+                wall_climb_point[2] = 300 + GROUND_Z
+                ground_points.append(wall_climb_point)
+                
+                num_setup_points = len(ground_points)
+                
+                # Aerial start point
+                aerial_start = wall_climb_point.copy()
+                aerial_start[0] -= wall_side * 200
+                aerial_start[2] += 200
+                
+                # Aerial path to goal
+                aerial_points, raw_control_point = generate_aerial_path_from_wall(
+                    aerial_start, end_point, wall_side, 1000
+                )
+                
+                # Combine
+                all_points = ground_points + list(aerial_points)
+                path_points = np.array(all_points)
+                start_point = ball_spawn
+                
+                # Generate conditions
+                num_path_points = len(path_points)
+                glue_conditions = np.zeros(num_path_points, dtype=np.float32)
+                flip_reset_conditions = np.zeros(num_path_points, dtype=np.float32)
+                setup_conditions = np.zeros(num_path_points, dtype=np.float32)
+                
+                # Mark setup points
+                setup_conditions[:num_setup_points] = 1.0
+                
+                # Flip reset conditions for aerial (non-setup) points
+                if random.random() < self.flip_reset_probability:
+                    for i in range(num_setup_points, num_path_points):
+                        if i > num_setup_points:  # Skip first aerial point
+                            flip_reset_conditions[i] = 1.0
+                
+                path_info = {
+                    "has_setup": True,
+                    "ball_spawn": ball_spawn,
+                    "car_spawn": car_spawn,
+                    "num_setup_points": num_setup_points
+                }
+                
+                # Build condition data
+                condition_data = np.zeros((num_path_points, self.num_conditions), dtype=np.float32)
+                condition_data[:, 6] = glue_conditions
+                condition_data[:, 7] = flip_reset_conditions
+                condition_data[:, 8] = setup_conditions
             else:
+                # Aerial-only path - use generate_random_path
+                path_points, start_point, end_point, raw_control_point, glue_conditions, flip_reset_conditions, setup_conditions, path_info = generate_random_path(
+                    step_distance=1000,
+                    has_setup_probability=0.0,  # Force aerial-only
+                    flip_reset_probability=self.flip_reset_probability
+                )
+                
+                num_path_points = len(path_points)
+                condition_data = np.zeros((num_path_points, self.num_conditions), dtype=np.float32)
+                if num_path_points > 0:
+                    condition_data[:, 6] = glue_conditions
+                    condition_data[:, 7] = flip_reset_conditions
+                    condition_data[:, 8] = setup_conditions
+                
                 state.ball.position = start_point.astype(np.float32)
                 
                 first_target = path_points[0] if len(path_points) > 0 else end_point
@@ -273,7 +354,7 @@ def build_eval_env(has_setup_probability=1.0, flip_reset_probability=1.0):
             shared_info["path_points"] = path_points.astype(np.float32)
             shared_info["path_start"] = start_point.astype(np.float32)
             shared_info["path_end"] = end_point.astype(np.float32)
-            shared_info["path_control"] = control_point.astype(np.float32)
+            shared_info["path_control"] = raw_control_point.astype(np.float32)
             shared_info["path_info"] = path_info
             shared_info["air_roll_rate"] = 0.0
             shared_info["air_roll_action"] = 0
@@ -367,7 +448,8 @@ def build_eval_env(has_setup_probability=1.0, flip_reset_probability=1.0):
         EvalAirDribbleDirectedMutator(
             num_conditions=num_conditions,
             has_setup_probability=has_setup_probability,
-            flip_reset_probability=flip_reset_probability
+            flip_reset_probability=flip_reset_probability,
+            spawn_index=spawn_index
         ),
     )
     
@@ -384,7 +466,8 @@ def build_eval_env(has_setup_probability=1.0, flip_reset_probability=1.0):
 
 
 def worker_process(worker_id: int, checkpoint_path: str, num_episodes: int, 
-                   result_queue: Queue, seed: int, min_flip_resets_to_save: int = 0):
+                   result_queue: Queue, seed: int, min_flip_resets_to_save: int = 0,
+                   spawn_index: int = None):
     """Worker process that runs episodes and sends results back."""
     from path_generator import SETUP_INDEX
     from rlgym.rocket_league.common_values import BALL_RESTING_HEIGHT
@@ -399,7 +482,7 @@ def worker_process(worker_id: int, checkpoint_path: str, num_episodes: int,
     device = "cuda" if torch.cuda.is_available() else "cpu"
     
     # Build environment
-    env = build_eval_env(has_setup_probability=1.0, flip_reset_probability=1.0)
+    env = build_eval_env(has_setup_probability=1.0, flip_reset_probability=1.0, spawn_index=spawn_index)
     
     # Load actor
     obs_space = env.observation_space("blue-0")
@@ -467,6 +550,7 @@ def worker_process(worker_id: int, checkpoint_path: str, num_episodes: int,
         ball_hit_ground_after_setup = False
         left_setup_phase = False
         ball_was_airborne = False
+        ball_velocity_to_goal = 0.0  # Track ball velocity toward goal at goal time
         
         while not done:
             agent_ids = list(obs_dict.keys())
@@ -498,6 +582,10 @@ def worker_process(worker_id: int, checkpoint_path: str, num_episodes: int,
                     if ball_z < GROUND_THRESHOLD:
                         ball_hit_ground_after_setup = True
             
+            # Capture ball velocity to goal at time of goal (blue team scores in orange goal at +Y)
+            if any(terminated.values()):
+                ball_velocity_to_goal = env.state.ball.linear_velocity[1]  # Y component toward orange goal
+            
             done = any(terminated.values()) or any(truncated.values())
         
         # Collect result
@@ -515,6 +603,7 @@ def worker_process(worker_id: int, checkpoint_path: str, num_episodes: int,
             num_ball_touches=shared_info.get("num_ball_touches", 0),
             num_setup_targets_hit=shared_info.get("num_setup_targets_hit", 0),
             num_air_targets_hit_after_setup=shared_info.get("num_air_targets_hit_after_setup", 0),
+            ball_velocity_to_goal=ball_velocity_to_goal,
             path_data=path_data if include_path_data else None,
             initial_state=initial_state_data if include_path_data else None,
         )
@@ -525,7 +614,8 @@ def worker_process(worker_id: int, checkpoint_path: str, num_episodes: int,
     result_queue.put((worker_id, None))  # Signal worker is done
 
 
-def save_best_path(path_data: Dict, initial_state: Dict, num_flip_resets: int, output_path: str):
+def save_best_path(path_data: Dict, initial_state: Dict, num_flip_resets: int, 
+                   ball_velocity_to_goal: float, output_path: str):
     """Save the best path data to a file."""
     path_info = path_data.get("path_info", {})
     
@@ -541,6 +631,7 @@ def save_best_path(path_data: Dict, initial_state: Dict, num_flip_resets: int, o
         car_spawn=path_info.get("car_spawn") if path_info.get("car_spawn") is not None else np.array([]),
         num_setup_points=np.array([path_info.get("num_setup_points", 0)]),
         expected_flip_resets=np.array([num_flip_resets]),  # Save for verification during replay
+        ball_velocity_to_goal=np.array([ball_velocity_to_goal]),  # Save ball velocity to goal
         ball_position=initial_state["ball_position"],
         ball_linear_velocity=initial_state["ball_linear_velocity"],
         ball_angular_velocity=initial_state["ball_angular_velocity"],
@@ -567,6 +658,8 @@ def main():
                         help="Random seed (default: random based on current time)")
     parser.add_argument("--output", type=str, default="best_path.npz",
                         help="Output file for best path data")
+    parser.add_argument("--spawn_index", type=int, default=None,
+                        help="Kickoff spawn index (0-4). Default: random. 0=left corner, 1=right corner, 2=left back, 3=right back, 4=far back")
     args = parser.parse_args()
     
     # Use time-based seed if not specified
@@ -577,6 +670,8 @@ def main():
     print(f"Starting multiprocess evaluation with {args.num_workers} workers")
     print(f"Total episodes: {args.num_episodes}")
     print(f"Checkpoint: {args.checkpoint}")
+    spawn_desc = f"spawn index {args.spawn_index}" if args.spawn_index is not None else "random spawn"
+    print(f"Setup spawn: {spawn_desc}")
     print(f"Only paths that end in GOAL + CLEAN AERIAL will be saved as best\n")
     
     # Distribute episodes across workers
@@ -591,13 +686,14 @@ def main():
     for i in range(args.num_workers):
         num_eps = episodes_per_worker + (1 if i < remainder else 0)
         p = Process(target=worker_process, args=(
-            i, args.checkpoint, num_eps, result_queue, args.seed, 0
+            i, args.checkpoint, num_eps, result_queue, args.seed, 0, args.spawn_index
         ))
         p.start()
         workers.append(p)
     
     # Collect results
     best_flip_resets = 0
+    best_ball_velocity = -float('inf')  # Track best ball velocity to goal (higher is better)
     best_result = None
     flip_reset_counts = []
     goals_scored = 0
@@ -622,15 +718,22 @@ def main():
         if result.scored_goal and result.clean_aerial:
             clean_goals += 1
             
-            # Check if this is best
-            if result.num_flip_resets > best_flip_resets:
+            # Check if this is best (flip resets is priority, ball velocity is tiebreaker)
+            is_better = (
+                result.num_flip_resets > best_flip_resets or
+                (result.num_flip_resets == best_flip_resets and result.ball_velocity_to_goal > best_ball_velocity)
+            )
+            if is_better:
                 best_flip_resets = result.num_flip_resets
+                best_ball_velocity = result.ball_velocity_to_goal
                 best_result = result
-                tqdm.write(f"[Worker {worker_id}] New best: {result.num_flip_resets} flip resets (GOAL + CLEAN AERIAL)!")
+                tqdm.write(f"[Worker {worker_id}] New best: {result.num_flip_resets} flip resets, "
+                          f"ball velocity to goal: {result.ball_velocity_to_goal:.1f} (GOAL + CLEAN AERIAL)!")
                 
                 # Save immediately
                 if result.path_data is not None and result.initial_state is not None:
-                    save_best_path(result.path_data, result.initial_state, result.num_flip_resets, args.output)
+                    save_best_path(result.path_data, result.initial_state, result.num_flip_resets, 
+                                   result.ball_velocity_to_goal, args.output)
                     tqdm.write(f"  Saved best path to: {args.output}")
     
     pbar.close()
@@ -656,6 +759,7 @@ def main():
         print("BEST EPISODE INFO (goal + clean aerial):")
         print("-" * 60)
         print(f"  Flip resets: {best_result.num_flip_resets}")
+        print(f"  Ball velocity to goal: {best_result.ball_velocity_to_goal:.1f}")
         print(f"  Ball touches: {best_result.num_ball_touches}")
         print(f"  Setup targets hit: {best_result.num_setup_targets_hit}")
         print(f"  Air targets hit after setup: {best_result.num_air_targets_hit_after_setup}")
