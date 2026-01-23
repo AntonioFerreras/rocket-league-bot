@@ -12,6 +12,7 @@ python = "3.13.7.*"
 rust = ">=1.90.0,<1.91"
 wandb = ">=0.22.2,<0.23"
 tqdm = ">=4.67.1,<5"
+pynput = ">=1.8.1,<2"
 
 [pypi-dependencies]
 rlgym = { version = "*", extras = ["all"] }
@@ -20,3 +21,4 @@ rlgym-learn-algos = { version = "*" }
 torch = { version = "==2.7.1", index = "https://download.pytorch.org/whl/cu128" }
 torchvision = { index = "https://download.pytorch.org/whl/cu128" }
 torchaudio = { index = "https://download.pytorch.org/whl/cu128" }
+pydirectinput = "*"
