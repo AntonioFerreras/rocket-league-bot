@@ -435,8 +435,6 @@ def main():
                         help="Use deterministic policy (default: True)")
     parser.add_argument("--speed", type=float, default=1.0,
                         help="Playback speed multiplier")
-    parser.add_argument("--record_actions", type=str, default=None,
-                        help="Output file to record actions (e.g., actions.npz)")
     args = parser.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -493,9 +491,6 @@ def main():
     render_delay = action_repeat / 120.0 / args.speed
     
     replay_count = 0
-    recording_actions = args.record_actions is not None
-    if recording_actions:
-        print(f"Recording actions to: {args.record_actions}")
     print(f"\nStarting replay (speed: {args.speed}x, deterministic: {args.deterministic})...")
     print("Press Ctrl+C to stop\n")
     
@@ -556,10 +551,6 @@ def main():
                         print(f"  ✗ OBSERVATION MISMATCH! Diff: {abs(obs_checksum - saved_checksum):.6f}")
                 print()
             
-            # Action recording lists
-            recorded_actions = []  # Policy action indices (one per decision)
-            recorded_ticks = []    # Tick count when action was taken
-            
             while not done:
                 agent_ids = list(obs_dict.keys())
                 obs_list = [obs_dict[agent_id] for agent_id in agent_ids]
@@ -574,13 +565,6 @@ def main():
                     state = env.state
                     car = list(state.cars.values())[0]
                     print(f"  Step {step_count}: car_pos={car.physics.position[:2].round(1)}, ball_pos={state.ball.position[:2].round(1)}, action={actions[0]}")
-                
-                # Record action before step
-                if recording_actions:
-                    # actions is a list with one action per agent
-                    # For single agent, actions[0] is the action index
-                    recorded_actions.append(int(actions[0]))
-                    recorded_ticks.append(env.state.tick_count if hasattr(env, 'state') else step_count * action_repeat)
                 
                 obs_dict, rewards, terminated, truncated = env.step(action_dict)
                 
@@ -610,18 +594,6 @@ def main():
             else:
                 print()
             print(f"  Ball touches: {shared_info.get('num_ball_touches', 0)}")
-            
-            # Save recorded actions after first replay
-            if recording_actions and replay_count == 1:
-                print(f"  Saving {len(recorded_actions)} actions to {args.record_actions}...")
-                np.savez(
-                    args.record_actions,
-                    actions=np.array(recorded_actions, dtype=np.int32),
-                    ticks=np.array(recorded_ticks, dtype=np.int32),
-                    action_repeat=np.array([action_repeat], dtype=np.int32),
-                )
-                print(f"  Actions saved!")
-            
             print()
             
             # Brief pause between replays
